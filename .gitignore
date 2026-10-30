@@ -1,0 +1,22 @@
+# Third-party fonts and scanned books are copyrighted: keep them local only.
+fonts/
+resources/
+data/
+
+# Trained weights are published through GitHub Releases, not the repo.
+models/
+*.onnx
+*.pt
+*.pth
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.idea/
+.vscode/
