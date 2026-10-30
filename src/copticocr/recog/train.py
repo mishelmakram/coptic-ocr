@@ -1,8 +1,13 @@
 """Train the Coptic line recognizer.
 
-    python -m copticocr.recog.train --data data/synth/v1 --out models/coptic-crnn
+    python -m copticocr.recog.train --data data/packed/synth-v1v2 --out models/coptic-crnn
 
-Saves ``best.pt`` (lowest validation CER) and ``last.pt`` in ``--out``.
+``--data`` is either one packed dataset (see ``copticocr.recog.packed``, much
+faster) or folders with ``labels.tsv``. Writes to ``--out``:
+
+- ``best.pt``: lowest validation CER, for inference
+- ``last.pt``: latest weights, for inference
+- ``state.pt``: everything needed to continue an interrupted run (``--resume``)
 """
 
 from __future__ import annotations
@@ -14,6 +19,7 @@ import sys
 import time
 from pathlib import Path
 
+import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
@@ -22,10 +28,43 @@ from .charset import Charset
 from .dataset import LineDataset, WidthBucketSampler, collate, read_labels
 from .metrics import cer
 from .model import CRNN, STRIDE
+from .packed import PackedLineDataset, is_packed
 
 
 def frame_lengths(widths: torch.Tensor, frames: int) -> torch.Tensor:
     return torch.clamp(torch.div(widths, STRIDE, rounding_mode="floor"), max=frames)
+
+
+def keep_system_awake() -> None:
+    """Stop Windows from idle-sleeping until this process exits (no settings change)."""
+    if sys.platform == "win32":
+        import ctypes
+
+        ES_CONTINUOUS, ES_SYSTEM_REQUIRED = 0x80000000, 0x00000001
+        ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
+
+
+def build_datasets(args, charset):
+    """(train set, val set, train widths, val widths); widths drive batch bucketing."""
+    if len(args.data) == 1 and is_packed(args.data[0]):
+        root = args.data[0]
+        widths = np.load(root / "widths.npy")
+        order = list(range(len(widths)))
+        random.Random(0).shuffle(order)
+        val, train = order[:args.val_size], order[args.val_size:]
+        if args.limit:
+            train = train[:args.limit]
+        return (PackedLineDataset(root, train, charset), PackedLineDataset(root, val, charset),
+                [int(widths[i]) for i in train], [int(widths[i]) for i in val])
+
+    items = [item for root in args.data for item in read_labels(root)]
+    random.Random(0).shuffle(items)
+    val, train = items[:args.val_size], items[args.val_size:]
+    if args.limit:
+        train = train[:args.limit]
+    # Label length is a good proxy for line width.
+    return (LineDataset(train, charset), LineDataset(val, charset),
+            [len(t) for _, t in train], [len(t) for _, t in val])
 
 
 @torch.no_grad()
@@ -44,7 +83,7 @@ def evaluate(model, loader, charset, device, show: int = 0) -> float:
     return cer(refs, hyps)
 
 
-def save(path: Path, model, charset, args, epoch: int, val_cer: float) -> None:
+def save_weights(path: Path, model, charset, args, epoch: int, val_cer: float | None) -> None:
     torch.save({
         "model": model.state_dict(),
         "symbols": charset.symbols,
@@ -56,42 +95,39 @@ def save(path: Path, model, charset, args, epoch: int, val_cer: float) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     sys.stdout.reconfigure(encoding="utf-8")
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--data", nargs="+", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--epochs", type=int, default=4)
+    # 32 keeps a 6 GB laptop GPU well inside its memory; spilling into shared memory is very slow.
+    parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--hidden", type=int, default=256)
     parser.add_argument("--val-size", type=int, default=2000)
-    parser.add_argument("--workers", type=int, default=6)
-    parser.add_argument("--resume", type=Path, help="checkpoint to start from")
+    # Each Windows loader process holds its own copy of torch (~1 GB); packed data needs none.
+    parser.add_argument("--workers", type=int, default=0)
+    parser.add_argument("--save-every", type=int, default=2000, help="steps between resumable checkpoints")
+    parser.add_argument("--resume", action="store_true", help="continue from --out/state.pt")
+    parser.add_argument("--init", type=Path, help="start from these weights (fine-tuning)")
     parser.add_argument("--limit", type=int, help="use only this many training lines (smoke tests)")
     args = parser.parse_args(argv)
 
+    keep_system_awake()
     torch.manual_seed(0)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     charset = Charset.coptic()
 
-    items = [item for root in args.data for item in read_labels(root)]
-    random.Random(0).shuffle(items)
-    val_items, train_items = items[:args.val_size], items[args.val_size:]
-    if args.limit:
-        train_items = train_items[:args.limit]
-    print(f"device {device}, {len(train_items)} train / {len(val_items)} val lines, {len(charset)} classes")
-
-    train_set = LineDataset(train_items, charset)
-    val_set = LineDataset(val_items, charset)
+    train_set, val_set, train_widths, val_widths = build_datasets(args, charset)
+    print(f"device {device}, {len(train_set)} train / {len(val_set)} val lines, {len(charset)} classes")
     loader_args = dict(collate_fn=collate, num_workers=args.workers, pin_memory=True,
                        persistent_workers=args.workers > 0)
-    train_loader = DataLoader(train_set, batch_sampler=WidthBucketSampler(
-        [len(text) for _, text in train_items], args.batch_size), **loader_args)
-    val_loader = DataLoader(val_set, batch_sampler=WidthBucketSampler(
-        [len(text) for _, text in val_items], args.batch_size), **loader_args)
+    sampler = WidthBucketSampler(train_widths, args.batch_size)
+    train_loader = DataLoader(train_set, batch_sampler=sampler, **loader_args)
+    val_loader = DataLoader(val_set, batch_sampler=WidthBucketSampler(val_widths, args.batch_size), **loader_args)
 
     model = CRNN(len(charset), args.hidden).to(device)
-    if args.resume:
-        model.load_state_dict(torch.load(args.resume, map_location=device)["model"])
+    if args.init:
+        model.load_state_dict(torch.load(args.init, map_location=device)["model"])
     print(f"{sum(p.numel() for p in model.parameters()) / 1e6:.1f}M parameters")
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
@@ -101,12 +137,30 @@ def main(argv: list[str] | None = None) -> None:
     scaler = torch.amp.GradScaler(enabled=device.type == "cuda")
 
     args.out.mkdir(parents=True, exist_ok=True)
+    state_path = args.out / "state.pt"
+    start_epoch, skip, best = 1, 0, float("inf")
+    if args.resume and state_path.exists():
+        state = torch.load(state_path, map_location=device)
+        model.load_state_dict(state["model"])
+        optimizer.load_state_dict(state["optimizer"])
+        scheduler.load_state_dict(state["scheduler"])
+        scaler.load_state_dict(state["scaler"])
+        start_epoch, skip, best = state["epoch"], state["step"], state["best"]
+        print(f"resuming at epoch {start_epoch}, step {skip}")
     (args.out / "config.json").write_text(json.dumps(
         {k: str(v) for k, v in vars(args).items()}, indent=2), encoding="utf-8")
-    best = float("inf")
-    for epoch in range(1, args.epochs + 1):
-        started, running = time.time(), 0.0
-        for step, (images, widths, targets, lengths, _) in enumerate(train_loader, 1):
+
+    def save_state(epoch: int, step: int) -> None:
+        torch.save({"model": model.state_dict(), "optimizer": optimizer.state_dict(),
+                    "scheduler": scheduler.state_dict(), "scaler": scaler.state_dict(),
+                    "epoch": epoch, "step": step, "best": best}, state_path)
+        save_weights(args.out / "last.pt", model, charset, args, epoch, None)
+
+    for epoch in range(start_epoch, args.epochs + 1):
+        sampler.epoch = epoch - 1  # same batch order as an uninterrupted run
+        sampler.skip = skip
+        started, running, tick = time.time(), 0.0, time.time()
+        for step, (images, widths, targets, lengths, _) in enumerate(train_loader, skip + 1):
             images = images.to(device, non_blocking=True)
             with torch.autocast(device.type, enabled=device.type == "cuda"):
                 logits = model(images)
@@ -123,15 +177,21 @@ def main(argv: list[str] | None = None) -> None:
 
             running += loss.item()
             if step % 200 == 0:
-                print(f"epoch {epoch} step {step}/{len(train_loader)} loss {running / 200:.3f}", flush=True)
-                running = 0.0
+                rate = (time.time() - tick) / 200
+                print(f"epoch {epoch} step {step}/{len(train_loader)} loss {running / 200:.3f} "
+                      f"{rate * 1000:.0f} ms/step", flush=True)
+                running, tick = 0.0, time.time()
+            if step % args.save_every == 0:
+                save_state(epoch, step)
+        skip = 0
 
         val_cer = evaluate(model, val_loader, charset, device, show=3)
         print(f"epoch {epoch} done in {time.time() - started:.0f}s, val CER {val_cer:.2%}", flush=True)
-        save(args.out / "last.pt", model, charset, args, epoch, val_cer)
         if val_cer < best:
             best = val_cer
-            save(args.out / "best.pt", model, charset, args, epoch, val_cer)
+            save_weights(args.out / "best.pt", model, charset, args, epoch, val_cer)
+        save_state(epoch + 1, 0)
+    print("training finished", flush=True)
 
 
 if __name__ == "__main__":

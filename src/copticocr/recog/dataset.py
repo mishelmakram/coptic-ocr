@@ -14,6 +14,7 @@ from .charset import Charset
 from .model import HEIGHT
 
 MAX_WIDTH = 1600
+PAD_TO = 64
 
 
 def load_image(img: Image.Image) -> torch.Tensor:
@@ -49,7 +50,8 @@ class LineDataset(Dataset):
 
 def collate(batch):
     images, targets, texts = zip(*batch)
-    width = max(img.shape[-1] for img in images)
+    # Few distinct batch shapes: cuDNN re-plans (slowly) for every new width.
+    width = -(-max(img.shape[-1] for img in images) // PAD_TO) * PAD_TO
     padded = torch.zeros(len(images), 1, HEIGHT, width)
     for i, img in enumerate(images):
         padded[i, :, :, : img.shape[-1]] = img
@@ -69,6 +71,7 @@ class WidthBucketSampler(Sampler):
         self.batch_size = batch_size
         self.seed = seed
         self.epoch = 0
+        self.skip = 0  # batches to leave out at the start (resuming mid-epoch)
 
     def __iter__(self):
         rng = random.Random(self.seed + self.epoch)
@@ -76,7 +79,7 @@ class WidthBucketSampler(Sampler):
         order = sorted(range(len(self.widths)), key=lambda i: (self.widths[i], rng.random()))
         batches = [order[i:i + self.batch_size] for i in range(0, len(order), self.batch_size)]
         rng.shuffle(batches)
-        return iter(batches)
+        return iter(batches[self.skip:])
 
     def __len__(self) -> int:
         return (len(self.widths) + self.batch_size - 1) // self.batch_size
