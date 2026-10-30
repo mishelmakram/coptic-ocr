@@ -1,10 +1,10 @@
 # Third-party fonts and scanned books are copyrighted: keep them local only.
-fonts/
-resources/
-data/
+/fonts/
+/resources/
+/data/
 
 # Trained weights are published through GitHub Releases, not the repo.
-models/
+/models/
 *.onnx
 *.pt
 *.pth
