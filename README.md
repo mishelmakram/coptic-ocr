@@ -8,7 +8,8 @@ Athanasius, Abraam) used by most church publications.
 > برنامج مفتوح المصدر للتعرّف الضوئي على الكتب الكنسية القبطية (بحيري + عربي)،
 > بيحوّل الكتب الممسوحة ضوئياً لـ PDF حديث قابل للبحث، وبيدعم خطوط الـ ANSI القديمة.
 
-**Status:** early development. Done so far: the legacy font ↔ Unicode converter.
+**Status:** early development. Done so far: the legacy font ↔ Unicode converter
+and the synthetic training-line generator.
 
 ## Planned pipeline
 
@@ -40,6 +41,28 @@ copticocr-legacy pdf "lessons.pdf" -o lessons.txt
 
 `tools/glyph_chart.py` renders every glyph of a font into a labelled chart, for
 building or reviewing a table.
+
+## Synthetic training lines
+
+The Coptic recognizer is trained mostly on generated line images: real Bohairic
+text rendered with each legacy and Unicode font, then degraded to look like an
+old scan (skew, blur, faded or bleeding ink, paper texture, noise, JPEG,
+bilevel scans). Labels are always Unicode.
+
+```bash
+pip install -e .[dev]
+python tools/build_corpus.py --lessons "resources/Coptic lessons.pdf"
+copticocr-synth --corpus data/corpus/bohairic_ot.txt data/corpus/lessons.txt \
+    --fonts fonts data/fonts_unicode --count 100000 --out data/synth/v1
+```
+
+Unicode fonts go in `data/fonts_unicode/` (e.g. [Noto Sans Coptic](https://fonts.google.com/noto/specimen/Noto+Sans+Coptic), OFL).
+
+### Text sources
+
+- Bohairic Old and New Testament from [Coptic SCRIPTORIUM](https://github.com/CopticScriptorium/corpora)
+  (CC-BY-SA 4.0; text from Marcion / Hany Takla). The Old Testament, including the
+  Psalms, keeps church orthography with jinkim.
 
 ## Fonts and books
 

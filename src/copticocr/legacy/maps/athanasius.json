@@ -16,6 +16,7 @@
     "V": "Ⲫ", "W": "Ⲱ", "X": "Ⲭ", "Y": "Ⲯ", "Z": "Ⲍ",
     "{": "Ⲝ", "|": "Ϩ", "}": "Ϣ", "\"": "Ϧ", ":": "Ϯ",
 
+    ",": "ⲋ", "<": "Ⲋ",
     "_": "ⲟ̅ⲥ̅",
     "%": ",",
     "&": "?",
@@ -41,8 +42,6 @@
     "÷": "̅"
   },
   "unknown": {
-    ",": "ϩ-like glyph with a tilde; meaning not confirmed",
-    "<": "ϩ-like glyph with a tail; meaning not confirmed",
     "+": "ornamental abbreviation",
     "=": "ornamental staurogram"
   }
