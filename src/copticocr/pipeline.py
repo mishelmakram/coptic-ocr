@@ -1,0 +1,168 @@
+"""From a scanned page to recognized text lines.
+
+    doc = Document.open("book.pdf")
+    engine = Engine("models/coptic-crnn-v2/best.pt")
+    page = engine.read(doc.page_image(0))
+
+The layout is found by projection profiles (one or two columns, running head,
+verse numbers in the margin). Each line is labelled with its script; Coptic
+lines are read by the line recognizer. Arabic lines are located but not read
+yet.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import numpy as np
+import pymupdf
+from PIL import Image
+
+from .layout.projection import (Box, binarize, find_lines, remove_rules, skip_header,
+                                split_columns, split_margin, text_left_edge)
+
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
+PDF_DPI = 300
+PAD = 6  # pixels kept around a line's ink when it is cut out
+COPTIC_MIN_CONFIDENCE = 0.6  # a column whose typical line reads worse is not Coptic
+
+
+@dataclass
+class TextLine:
+    box: Box
+    script: str  # "coptic" or "arabic"
+    text: str = ""
+    confidences: list[float] = field(default_factory=list)  # one per letter
+    label: Box | None = None  # verse number in the margin
+    edited: bool = False
+
+    @property
+    def confidence(self) -> float:
+        return min(self.confidences, default=1.0)
+
+
+@dataclass
+class PageResult:
+    size: tuple[int, int]  # width, height in pixels
+    lines: list[TextLine]
+
+    def text(self, script: str | None = None) -> str:
+        return "\n".join(line.text for line in self.lines if script in (None, line.script))
+
+
+class Document:
+    """Pages of a PDF, a multi-page TIFF or a list of images, loaded on demand."""
+
+    def __init__(self, paths: list[Path]):
+        self.paths = paths
+        self._pages: list[tuple[Path, int]] = []
+        for path in paths:
+            if path.suffix.lower() == ".pdf":
+                with pymupdf.open(path) as doc:
+                    self._pages += [(path, i) for i in range(doc.page_count)]
+            else:
+                with Image.open(path) as img:
+                    self._pages += [(path, i) for i in range(getattr(img, "n_frames", 1))]
+        self._open: dict[Path, pymupdf.Document] = {}
+
+    @classmethod
+    def open(cls, *paths: str | Path) -> Document:
+        return cls([Path(p) for p in paths])
+
+    @property
+    def name(self) -> str:
+        return self.paths[0].stem if self.paths else ""
+
+    def __len__(self) -> int:
+        return len(self._pages)
+
+    def source(self, index: int) -> tuple[Path, int]:
+        return self._pages[index]
+
+    def page_image(self, index: int) -> Image.Image:
+        """The page as a grayscale image (PDF pages at their scan resolution, else 300 dpi)."""
+        path, number = self._pages[index]
+        if path.suffix.lower() != ".pdf":
+            with Image.open(path) as img:
+                img.seek(number)
+                return img.convert("L")
+        doc = self._open.get(path) or self._open.setdefault(path, pymupdf.open(path))
+        page = doc[number]
+        images = page.get_images()
+        if len(images) == 1 and not page.get_text().strip():
+            pix = pymupdf.Pixmap(doc, images[0][0])  # a scan: take the image as stored
+            if pix.n - pix.alpha != 1:
+                pix = pymupdf.Pixmap(pymupdf.csGRAY, pix)
+        else:
+            pix = page.get_pixmap(dpi=PDF_DPI, colorspace=pymupdf.csGRAY)
+        gray = np.frombuffer(pix.samples, np.uint8).reshape(pix.h, pix.stride)[:, :pix.w]
+        return Image.fromarray(gray.copy())
+
+    def close(self) -> None:
+        for doc in self._open.values():
+            doc.close()
+        self._open.clear()
+
+
+def find_text_lines(gray: np.ndarray) -> list[list[TextLine]]:
+    """Lines of each text column, top to bottom; scripts are not decided yet."""
+    ink = binarize(gray)
+    clean = remove_rules(ink)
+    columns = split_columns(clean)
+    if columns is None:
+        rows, cols = np.flatnonzero(clean.any(1)), np.flatnonzero(clean.any(0))
+        if not len(rows):
+            return []
+        columns = (Box(int(cols[0]), int(rows[0]), int(cols[-1]) + 1, int(rows[-1]) + 1),)
+    result = []
+    for column in columns:
+        column = skip_header(ink, column)  # the rule under a running head is in ``ink`` only
+        boxes = find_lines(clean, column)
+        if not boxes:
+            continue
+        left = text_left_edge(boxes)
+        lines = []
+        for box in boxes:
+            label, text = split_margin(clean, box, left)
+            lines.append(TextLine(text, "coptic", label=label))
+        result.append(lines)
+    return result
+
+
+def crop(gray: Image.Image, box: Box) -> Image.Image:
+    return gray.crop((max(0, box.x0 - PAD), max(0, box.y0 - PAD),
+                      min(gray.width, box.x1 + PAD), min(gray.height, box.y1 + PAD)))
+
+
+class Engine:
+    """Layout analysis plus line recognition, for one page at a time."""
+
+    def __init__(self, checkpoint: str | Path, device: str | None = None, batch: int = 32):
+        from .recog.infer import Recognizer  # torch is slow to import; only load it when reading
+
+        self.recognizer = Recognizer(checkpoint, device)
+        self.batch = batch
+
+    @property
+    def device(self) -> str:
+        return str(self.recognizer.device)
+
+    def read(self, image: Image.Image) -> PageResult:
+        gray = image.convert("L")
+        columns = find_text_lines(np.asarray(gray))
+        lines: list[TextLine] = []
+        for column in columns:
+            self._read_lines(gray, column)
+            # The weakest letter of a Coptic line is still read well; Arabic lines are guesswork.
+            if np.median([line.confidence if line.text else 0.0 for line in column]) < COPTIC_MIN_CONFIDENCE:
+                for line in column:  # not Coptic: most likely the Arabic column
+                    line.script, line.text, line.confidences = "arabic", "", []
+            lines += column
+        return PageResult(gray.size, lines)
+
+    def _read_lines(self, gray: Image.Image, lines: list[TextLine]) -> None:
+        for i in range(0, len(lines), self.batch):
+            chunk = lines[i:i + self.batch]
+            for line, (text, conf) in zip(chunk, self.recognizer.recognize_batch([crop(gray, l.box) for l in chunk])):
+                line.text, line.confidences = text, conf

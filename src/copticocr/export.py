@@ -1,0 +1,136 @@
+"""Save recognized pages as plain text, a Word document or a searchable PDF.
+
+Recognized text is Unicode. For Word, the Coptic can be set in any font: a
+Unicode font keeps the text as is, a legacy font (CS Avva Shenouda,
+Athanasius, ...) gets the text converted to that font's encoding.
+"""
+
+from __future__ import annotations
+
+from importlib import resources
+from pathlib import Path
+
+import pymupdf
+
+from .legacy import layout_for_font
+from .pipeline import Document, PageResult
+
+UNICODE_FONT = "Noto Sans Coptic"
+ARABIC_FONT = "Traditional Arabic"
+
+
+def bundled_font(name: str = "NotoSansCoptic-Regular.ttf") -> Path:
+    return Path(str(resources.files(__package__).joinpath("assets", "fonts", name)))
+
+
+def coptic_text(text: str, font: str) -> str:
+    """``text`` as it must be stored to show correctly in ``font``."""
+    layout = layout_for_font(font)
+    return layout.from_unicode(text, errors="replace") if layout else text
+
+
+def page_paragraphs(result: PageResult, script: str) -> list[str]:
+    return [line.text for line in result.lines if line.script == script and line.text.strip()]
+
+
+def to_text(results: list[PageResult | None], path: Path) -> None:
+    pages = []
+    for result in results:
+        if result is not None:
+            pages.append("\n".join(page_paragraphs(result, "coptic") + page_paragraphs(result, "arabic")))
+    path.write_text("\n\n".join(pages) + "\n", encoding="utf-8")
+
+
+def to_docx(results: list[PageResult | None], path: Path, coptic_font: str = UNICODE_FONT,
+            size: float = 14) -> None:
+    import docx
+    from docx.enum.text import WD_BREAK
+    from docx.oxml.ns import qn
+    from docx.shared import Pt
+
+    document = docx.Document()
+    style = document.styles["Normal"]
+    style.font.name = coptic_font
+    style.font.size = Pt(size)
+    first = True
+    for result in results:
+        if result is None:
+            continue
+        if not first:
+            document.paragraphs[-1].add_run().add_break(WD_BREAK.PAGE)
+        first = False
+        for text in page_paragraphs(result, "coptic"):
+            run = document.add_paragraph().add_run(coptic_text(text, coptic_font))
+            run.font.name = coptic_font
+            # Word picks the font per character class; set it for all of them.
+            fonts = run._element.get_or_add_rPr().get_or_add_rFonts()
+            for attr in ("w:ascii", "w:hAnsi", "w:cs", "w:eastAsia"):
+                fonts.set(qn(attr), coptic_font)
+        for text in page_paragraphs(result, "arabic"):
+            paragraph = document.add_paragraph()
+            paragraph.paragraph_format.right_to_left = True
+            run = paragraph.add_run(text)
+            run.font.rtl = True
+            run.font.name = ARABIC_FONT
+    if first:
+        document.add_paragraph()
+    document.save(path)
+
+
+def to_searchable_pdf(doc: Document, results: list[PageResult | None], path: Path) -> None:
+    """The original pages with the recognized text laid invisibly over each line.
+
+    Pages that were not recognized are copied without text.
+    """
+    font_file = bundled_font()
+    font = pymupdf.Font(fontfile=str(font_file))
+    out = pymupdf.open()
+    sources: dict[Path, pymupdf.Document] = {}
+    try:
+        for index, result in enumerate(results):
+            source, number = doc.source(index)
+            if source.suffix.lower() == ".pdf":
+                src = sources.get(source) or sources.setdefault(source, pymupdf.open(source))
+                out.insert_pdf(src, from_page=number, to_page=number)
+                page = out[-1]
+            else:
+                image = doc.page_image(index)
+                dpi = _dpi(source)
+                page = out.new_page(width=image.width * 72 / dpi, height=image.height * 72 / dpi)
+                if number == 0:
+                    page.insert_image(page.rect, filename=str(source))  # keeps the file's own compression
+                else:
+                    page.insert_image(page.rect, pixmap=_pixmap(image))
+            if result is None:
+                continue
+            page.insert_font(fontname="coptic", fontfile=str(font_file))
+            scale = page.rect.width / result.size[0]
+            for line in result.lines:
+                if line.script != "coptic" or not line.text.strip():
+                    continue
+                width = (line.box.x1 - line.box.x0) * scale
+                height = (line.box.y1 - line.box.y0) * scale
+                size = min(width / max(font.text_length(line.text, 1), 1e-3), height)
+                baseline = pymupdf.Point(line.box.x0 * scale, line.box.y1 * scale - 0.15 * height)
+                page.insert_text(baseline, line.text, fontname="coptic", fontsize=size, render_mode=3)
+        out.save(path, garbage=3, deflate=True)
+    finally:
+        out.close()
+        for src in sources.values():
+            src.close()
+
+
+def _dpi(path: Path) -> float:
+    from PIL import Image
+
+    with Image.open(path) as img:
+        dpi = img.info.get("dpi", (300, 300))[0]
+    return float(dpi) if dpi and dpi > 30 else 300.0
+
+
+def _pixmap(image) -> pymupdf.Pixmap:
+    import io
+
+    buffer = io.BytesIO()
+    image.save(buffer, "PNG")
+    return pymupdf.Pixmap(buffer.getvalue())

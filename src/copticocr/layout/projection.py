@@ -32,6 +32,36 @@ def binarize(gray: np.ndarray, threshold: int = 128) -> np.ndarray:
     return gray < threshold
 
 
+def _long_runs(ink: np.ndarray, length: int) -> np.ndarray:
+    """Pixels lying in a vertical run of ink at least ``length`` long."""
+    length = max(1, min(length, ink.shape[0]))
+    c = np.concatenate([np.zeros((1, ink.shape[1]), np.int32), np.cumsum(ink, 0, dtype=np.int32)])
+    start = (c[length:] - c[:-length]) == length  # a full run starts at each such row
+    s = np.concatenate([np.zeros((1, ink.shape[1]), np.int32), np.cumsum(start, 0, dtype=np.int32)])
+    rows = np.arange(ink.shape[0])
+    lo = np.clip(rows - length + 1, 0, len(start))
+    hi = np.clip(rows + 1, 0, len(start))
+    return (s[hi] - s[lo]) > 0
+
+
+def remove_rules(ink: np.ndarray, vertical: float = 0.15, horizontal: float = 0.25) -> np.ndarray:
+    """The ink without frames and column rules: straight runs longer than any glyph."""
+    # Scanned rules are a little slanted and broken: measure on a thickened copy.
+    thick = _spread(_spread(ink, 1, 1), 0, 1)
+    rules = _long_runs(thick, int(ink.shape[0] * vertical))
+    rules |= _long_runs(_spread(thick, 1, 1).T, int(ink.shape[1] * horizontal)).T
+    return ink & ~_spread(_spread(rules, 1, 1), 0, 1)
+
+
+def _spread(mask: np.ndarray, axis: int, n: int) -> np.ndarray:
+    """``mask`` grown by ``n`` pixels both ways along ``axis``."""
+    out = mask.copy()
+    for k in range(1, n + 1):
+        shifted = np.roll(mask, k, axis) | np.roll(mask, -k, axis)
+        out |= shifted
+    return out
+
+
 def runs(mask: np.ndarray) -> list[tuple[int, int]]:
     """[start, end) of each run of True values."""
     padded = np.concatenate([[False], mask, [False]])
@@ -61,7 +91,7 @@ def split_columns(ink: np.ndarray, lo: float = 0.35, hi: float = 0.75) -> tuple[
     if gap is None or gap[1] - gap[0] < width * 0.005:
         return None
     top, bottom = int(rows[0]), int(rows[-1]) + 1
-    return Box(int(cols[0]), top, gap[0], bottom), Box(gap[1], top, int(cols[-1]) + 1, bottom)
+    return Box(int(cols[0]), top, int(gap[0]), bottom), Box(int(gap[1]), top, int(cols[-1]) + 1, bottom)
 
 
 def skip_header(ink: np.ndarray, box: Box, search: float = 0.12) -> Box:
@@ -115,7 +145,7 @@ def find_lines(ink: np.ndarray, box: Box, min_gap: int = 2) -> list[Box]:
     out = []
     for s, e in lines:
         cols = np.flatnonzero(region[s:e].any(0))
-        out.append(Box(box.x0 + int(cols[0]), box.y0 + s, box.x0 + int(cols[-1]) + 1, box.y0 + e))
+        out.append(Box(box.x0 + int(cols[0]), box.y0 + int(s), box.x0 + int(cols[-1]) + 1, box.y0 + int(e)))
     return out
 
 
@@ -150,5 +180,5 @@ def split_margin(ink: np.ndarray, line: Box, text_left: int, slack: int = 15) ->
     rest = np.flatnonzero(region[:, e:].any(0))
     if not len(rest):
         return None, line
-    return (Box(line.x0, line.y0, line.x0 + s, line.y1),
-            Box(line.x0 + e + int(rest[0]), line.y0, line.x1, line.y1))
+    return (Box(line.x0, line.y0, line.x0 + int(s), line.y1),
+            Box(line.x0 + int(e) + int(rest[0]), line.y0, line.x1, line.y1))
