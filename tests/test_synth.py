@@ -33,6 +33,8 @@ def test_sampler_lines_come_from_the_corpus():
         assert line and not unicodedata.combining(line[0])
         for word in line.rstrip(" :.").split():
             word = word.rstrip(":.")
+            if "̅" in word or word.lower().endswith("ⲫϯ"):
+                continue  # printed as an abbreviation
             if word.endswith("-"):
                 assert any(w.startswith(word[:-1]) for w in words), word
             else:

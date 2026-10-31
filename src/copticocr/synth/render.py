@@ -16,6 +16,7 @@ from pathlib import Path
 from fontTools.ttLib import TTFont
 from PIL import Image, ImageDraw, ImageFont
 
+from ..data import abbreviations
 from ..data.corpus import is_coptic_letter
 from ..legacy import Layout, layout_for_font
 
@@ -98,6 +99,12 @@ class LineSampler:
         text = " ".join(line)
 
         # Typography seen in printed books.
+        if rng.random() < 0.35:
+            text = abbreviations.abbreviate(text, rng, rate=0.7)
+        if rng.random() < 0.05:
+            words = text.split(" ")
+            words.insert(rng.randint(0, len(words)), abbreviations.sample(rng))
+            text = " ".join(words)
         roll = rng.random()
         if roll < 0.15:
             text += rng.choice([" :", ":", "."])
