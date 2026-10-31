@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 import pymupdf
 
+from .layout.projection import binarize, word_spans
 from .legacy import layout_for_font
 from .pipeline import Document, PageResult
 
@@ -107,14 +108,21 @@ def to_searchable_pdf(doc: Document, results: list[PageResult | None], path: Pat
                 continue
             page.insert_font(fontname="coptic", fontfile=str(font_file))
             scale = page.rect.width / result.size[0]
+            ink = binarize(np.asarray(doc.page_image(index).convert("L")))
             for line in result.lines:
                 if line.script != "coptic" or not line.text.strip():
                     continue
-                width = (line.box.x1 - line.box.x0) * scale
-                height = (line.box.y1 - line.box.y0) * scale
-                size = min(width / max(font.text_length(line.text, 1), 1e-3), height)
-                baseline = pymupdf.Point(line.box.x0 * scale, line.box.y1 * scale - 0.15 * height)
-                page.insert_text(baseline, line.text, fontname="coptic", fontsize=size, render_mode=3)
+                height = line.box.height * scale
+                words = line.text.split()
+                # Each word over its printed word, so selecting a word in the scan copies that word.
+                spans = word_spans(ink, line.box, len(words))
+                if spans is None:
+                    words, spans = [line.text], [(line.box.x0, line.box.x1)]
+                for word, (x0, x1) in zip(words, spans):
+                    width = (x1 - x0) * scale
+                    size = min(width / max(font.text_length(word, 1), 1e-3), height)
+                    baseline = pymupdf.Point(x0 * scale, line.box.y1 * scale - 0.15 * height)
+                    page.insert_text(baseline, word, fontname="coptic", fontsize=size, render_mode=3)
         out.save(path, garbage=3, deflate=True)
     finally:
         out.close()

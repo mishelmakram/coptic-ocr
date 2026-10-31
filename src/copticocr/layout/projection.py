@@ -157,6 +157,30 @@ def find_lines(ink: np.ndarray, box: Box, min_gap: int = 2) -> list[Box]:
     return out
 
 
+def word_spans(ink: np.ndarray, line: Box, words: int) -> list[tuple[int, int]] | None:
+    """x ranges of the ``words`` printed words of a line, or None if they cannot be told apart.
+
+    Words are runs of ink split at the widest gaps; justified lines have wide spaces,
+    letters within a word nearly touch.
+    """
+    cols = ink[line.y0:line.y1, line.x0:line.x1].any(0)
+    pieces = runs(cols)
+    if len(pieces) < words or words < 1:
+        return None
+    gaps = sorted(range(len(pieces) - 1), key=lambda i: pieces[i + 1][0] - pieces[i][1], reverse=True)
+    cuts = sorted(gaps[:words - 1])
+    if words > 1:
+        narrowest = min(pieces[i + 1][0] - pieces[i][1] for i in cuts)
+        widest_inside = max((pieces[i + 1][0] - pieces[i][1] for i in gaps[words - 1:]), default=0)
+        if narrowest <= widest_inside * 1.2:
+            return None  # no clear difference between word spaces and letter spacing
+    spans, start = [], 0
+    for cut in cuts + [len(pieces) - 1]:
+        spans.append((line.x0 + int(pieces[start][0]), line.x0 + int(pieces[cut][1])))
+        start = cut + 1
+    return spans
+
+
 def text_left_edge(lines: list[Box]) -> int:
     """Left edge of the text block when some lines carry marginal labels (verse numbers).
 
