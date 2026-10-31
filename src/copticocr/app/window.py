@@ -23,6 +23,17 @@ from .worker import Reader
 THUMB = QSize(96, 132)
 
 
+def typeset_preview(image, result: PageResult):
+    """The page as the typeset PDF shows it, at the scan's pixel size."""
+    import pymupdf
+    from PIL import Image
+
+    with pymupdf.open() as out:
+        page = export.typeset_page(out, image, result, (image.width, image.height))
+        pix = page.get_pixmap(dpi=72, colorspace=pymupdf.csGRAY)
+        return Image.frombytes("L", (pix.width, pix.height), pix.samples)
+
+
 def default_checkpoint() -> Path | None:
     """$COPTICOCR_MODEL, else the newest ``models/*/best.pt`` next to the program."""
     if os.environ.get("COPTICOCR_MODEL"):
@@ -89,6 +100,8 @@ class MainWindow(QMainWindow):
         self.zoom_out_action = self._action("zoom_out", lambda: self.view.zoom(1 / 1.2), QKeySequence.ZoomOut,
                                             "zoom_out")
         self.fit_action = self._action("fit_width", lambda: self.view.fit_width(), "Ctrl+0", "fit")
+        self.converted_action = self._action("converted", lambda _: self._show_current(), "Ctrl+T", "type",
+                                             "converted_tip", checkable=True)
         self.dark_action = self._action("dark_mode", self.toggle_dark, "Ctrl+Shift+D", "moon", checkable=True)
         self.dark_action.setChecked(self.theme.dark)
         self.keys_action = self._action("keyboard", self.toggle_keys, None, "keyboard", "keyboard_tip",
@@ -104,6 +117,7 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
         menu.addAction(tr("quit"), QKeySequence.Quit, self.close)
         menu = self.menuBar().addMenu(tr("view"))
+        menu.addAction(self.converted_action)
         menu.addActions([self.zoom_in_action, self.zoom_out_action, self.fit_action])
         menu.addSeparator()
         menu.addAction(self.dark_action)
@@ -140,6 +154,8 @@ class MainWindow(QMainWindow):
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         bar.addWidget(spacer)
+        bar.addAction(self.converted_action)
+        bar.addSeparator()
         for action in (self.zoom_out_action, self.zoom_in_action, self.fit_action, self.keys_action,
                        self.dark_action):
             bar.addAction(action)
@@ -171,7 +187,9 @@ class MainWindow(QMainWindow):
         self.panel = ProofreadPanel(self.theme, self.coptic_font)
         self.panel.set_legacy_keys(self.keys_action.isChecked())
         self.panel.line_selected.connect(lambda i: self.view.select_line(i))
-        self.panel.line_edited.connect(lambda _: self.view.set_result(self.results[self.current]))
+        self.panel.line_edited.connect(lambda _: self._refresh_timer.start())
+        # Re-typeset the page shortly after the user stops typing.
+        self._refresh_timer = QTimer(self, singleShot=True, interval=500, timeout=self._show_current)
 
         splitter = QSplitter()
         splitter.addWidget(self.pages)
@@ -326,9 +344,19 @@ class MainWindow(QMainWindow):
         if self.pages.currentRow() != index:
             self.pages.setCurrentRow(index)
         self.page_image = self.doc.page_image(index)
-        self.view.show_page(self.page_image, self.results[index])
+        self.view.clear()
+        self._show_current()
         self.panel.set_page(self.page_image, self.results[index])
         self._update_state()
+
+    def _show_current(self) -> None:
+        """The page as scanned, or with its Coptic set in type when that view is on and the page is read."""
+        if self.current < 0:
+            return
+        result = self.results[self.current]
+        converted = self.converted_action.isChecked() and result is not None
+        image = typeset_preview(self.page_image, result) if converted else self.page_image
+        self.view.show_page(image, result, quiet=converted)
 
     def _line_clicked_on_page(self, index: int) -> None:
         self.view.select_line(index, scroll=False)
@@ -400,8 +428,11 @@ class MainWindow(QMainWindow):
         if item is not None:
             item.setText(f"✓ {index + 1}")
         if index == self.current:
-            self.view.set_result(result)
+            self.converted_action.setChecked(True)  # show what the reading produced
+            self._show_current()
             self.panel.set_page(self.page_image, result)
+            coptic = sum(line.script == "coptic" and bool(line.text) for line in result.lines)
+            self.statusBar().showMessage(tr("page_done", index + 1, coptic), 15000)
         self._update_state()
 
     def _stop_reader(self) -> None:
@@ -437,13 +468,16 @@ class MainWindow(QMainWindow):
         results = list(self.results)
         if choice.current_page_only:
             results = [r if i == self.current else None for i, r in enumerate(results)]
-        start = Path(self.settings.value("last_dir", str(Path.home()))) / f"{self.doc.name}.{choice.format}"
+        suffix = "pdf" if choice.format == "typeset" else choice.format
+        start = Path(self.settings.value("last_dir", str(Path.home()))) / f"{self.doc.name}.{suffix}"
         path, _ = QFileDialog.getSaveFileName(self, tr("export"), str(start), choice.file_filter)
         if not path:
             return
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            if choice.format == "pdf":
+            if choice.format == "typeset":
+                export.to_typeset_pdf(self.doc, results, Path(path))
+            elif choice.format == "pdf":
                 export.to_searchable_pdf(self.doc, results, Path(path))
             elif choice.format == "docx":
                 export.to_docx(results, Path(path), choice.coptic_font)
@@ -466,6 +500,7 @@ class MainWindow(QMainWindow):
         self.export_action.setEnabled(any(r is not None for r in self.results))
         for action in (self.zoom_in_action, self.zoom_out_action, self.fit_action):
             action.setEnabled(has_doc)
+        self.converted_action.setEnabled(has_doc and self.current >= 0 and self.results[self.current] is not None)
         if has_doc:
             read = sum(r is not None for r in self.results)
             self.page_label.setText(f"{tr('page_of', self.current + 1, len(self.doc))}  ·  "

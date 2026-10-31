@@ -5,15 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from PySide6.QtGui import QFontDatabase
-from PySide6.QtWidgets import (QButtonGroup, QComboBox, QDialog, QGroupBox, QHBoxLayout, QPushButton,
+from PySide6.QtWidgets import (QButtonGroup, QComboBox, QDialog, QGroupBox, QHBoxLayout, QLabel, QPushButton,
                                QRadioButton, QVBoxLayout)
 
 from ..export import UNICODE_FONT
 from ..legacy import layouts
 from .i18n import tr
 
-FORMATS = [("pdf", "fmt_pdf", "PDF (*.pdf)"), ("docx", "fmt_docx", "Word (*.docx)"),
-           ("txt", "fmt_txt", "Text (*.txt)")]
+FORMATS = [("typeset", "fmt_typeset", "PDF (*.pdf)"), ("pdf", "fmt_pdf", "PDF (*.pdf)"),
+           ("docx", "fmt_docx", "Word (*.docx)"), ("txt", "fmt_txt", "Text (*.txt)")]
 
 
 @dataclass
@@ -49,6 +49,10 @@ class ExportDialog(QDialog):
             button.setChecked(i == 0)
             self.formats.addButton(button, i)
             box.addWidget(button)
+        hint = QLabel(tr("export_hint"))
+        hint.setObjectName("muted")
+        hint.setWordWrap(True)
+        box.addWidget(hint)
         layout.addWidget(group)
 
         group = QGroupBox(tr("coptic_font"))

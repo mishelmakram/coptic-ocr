@@ -21,6 +21,7 @@ PATHS = {
     "moon": '<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',
     "keyboard": '<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01'
                 'M7 14h10"/>',
+    "type": '<path d="M5 6V4h14v2M12 4v16M9 20h6"/>',
     "prev": '<path d="M15 6l-6 6 6 6"/>',
     "next": '<path d="M9 6l6 6-6 6"/>',
 }

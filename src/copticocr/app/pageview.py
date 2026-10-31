@@ -43,6 +43,7 @@ class PageView(QGraphicsView):
         self._result: PageResult | None = None
         self._selected = -1
         self._fit = True
+        self.quiet = False  # outline only the selected line (over typeset text the boxes are clutter)
 
     def set_theme(self, theme: Theme) -> None:
         self.theme = theme
@@ -52,12 +53,16 @@ class PageView(QGraphicsView):
         self.scene().clear()
         self._page, self._lines, self._result, self._selected = None, [], None, -1
 
-    def show_page(self, image: Image.Image, result: PageResult | None) -> None:
+    def show_page(self, image: Image.Image, result: PageResult | None, quiet: bool = False) -> None:
+        selected = self._selected
+        self.quiet = quiet
         self.clear()
         self._page = self.scene().addPixmap(to_pixmap(image))
         self._page.setTransformationMode(Qt.SmoothTransformation)
         self.scene().setSceneRect(QRectF(self._page.pixmap().rect()).adjusted(-40, -40, 40, 40))
         self.set_result(result)
+        if 0 <= selected < len(self._lines):
+            self.select_line(selected, scroll=False)
         if self._fit:
             self.fit_width()
 
@@ -93,6 +98,8 @@ class PageView(QGraphicsView):
             pen.setCosmetic(True)
             fill = QColor(color)
             fill.setAlpha(60 if item.index == self._selected else 14)
+            if self.quiet and item.index != self._selected:
+                pen, fill = QPen(Qt.NoPen), QColor(Qt.transparent)
             if item.index == self._selected:
                 pen = QPen(QColor(self.theme.accent), 3)
                 pen.setCosmetic(True)

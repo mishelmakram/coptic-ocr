@@ -7,6 +7,7 @@ Athanasius, ...) gets the text converted to that font's encoding.
 
 from __future__ import annotations
 
+import html
 from importlib import resources
 from pathlib import Path
 
@@ -118,6 +119,64 @@ def to_searchable_pdf(doc: Document, results: list[PageResult | None], path: Pat
         out.close()
         for src in sources.values():
             src.close()
+
+
+def page_size(doc: Document, index: int, image) -> tuple[float, float]:
+    """Size in points of page ``index``: the original PDF page, or the image at its resolution."""
+    source, number = doc.source(index)
+    if source.suffix.lower() == ".pdf":
+        with pymupdf.open(source) as src:
+            rect = src[number].rect
+        return rect.width, rect.height
+    dpi = _dpi(source)
+    return image.width * 72 / dpi, image.height * 72 / dpi
+
+
+def typeset_page(out: pymupdf.Document, image, result: PageResult, size: tuple[float, float]) -> pymupdf.Page:
+    """Add a page where every recognized Coptic line is set in type where it was printed.
+
+    Everything else on the page (Arabic, verse numbers, running heads) is kept from
+    the scan, as an image, until it can be recognized too.
+    """
+    from PIL import ImageDraw
+
+    background = image.convert("L").copy()
+    draw = ImageDraw.Draw(background)
+    lines = [line for line in result.lines if line.script == "coptic" and line.text.strip()]
+    for line in lines:
+        b = line.box
+        draw.rectangle((b.x0 - 3, b.y0 - 3, b.x1 + 3, b.y1 + 3), fill=255)
+    page = out.new_page(width=size[0], height=size[1])
+    page.insert_image(page.rect, pixmap=_pixmap(background))
+    if not lines:
+        return page
+    scale = page.rect.width / result.size[0]
+    archive = pymupdf.Archive(str(bundled_font().parent))
+    # One size for the page, from a typical line; a line's box height varies with its marks.
+    size = sorted(line.box.height for line in lines)[len(lines) // 2] * scale * 0.7
+    css = (f"@font-face {{font-family: coptic; src: url({bundled_font().name});}} "
+           f"* {{font-family: coptic; font-size: {size:.2f}px; white-space: nowrap; margin: 0; "
+           f"line-height: 1.3;}}")
+    for line in lines:
+        b = line.box
+        # The box bottom is close to the baseline; hang the type from there.
+        bottom = b.y1 * scale + size * 0.3
+        rect = pymupdf.Rect(b.x0 * scale, bottom - size * 1.3, max(b.x1 * scale, b.x0 * scale + size), bottom)
+        page.insert_htmlbox(rect, html.escape(line.text), css=css, archive=archive, scale_low=0)
+    return page
+
+
+def to_typeset_pdf(doc: Document, results: list[PageResult | None], path: Path) -> None:
+    """A new PDF of the pages read, with their Coptic set in type (see ``typeset_page``)."""
+    out = pymupdf.open()
+    try:
+        for index, result in enumerate(results):
+            if result is not None:
+                image = doc.page_image(index)
+                typeset_page(out, image, result, page_size(doc, index, image))
+        out.save(path, garbage=3, deflate=True)
+    finally:
+        out.close()
 
 
 def _dpi(path: Path) -> float:
