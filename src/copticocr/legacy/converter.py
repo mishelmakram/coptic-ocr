@@ -71,7 +71,7 @@ class Layout:
             else:
                 piece = REPLACEMENT
 
-            if pending and not piece.isspace():
+            if pending and piece and not piece.isspace():  # "" is an invisible glyph
                 piece = piece[0] + "".join(pending) + piece[1:]
                 pending.clear()
             out.append(piece)

@@ -22,7 +22,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from torch import nn
-from torch.utils.data import DataLoader
+from torch.utils.data import ConcatDataset, DataLoader, Subset
 
 from .charset import Charset
 from .dataset import LineDataset, WidthBucketSampler, collate, read_labels
@@ -44,27 +44,54 @@ def keep_system_awake() -> None:
         ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
 
 
-def build_datasets(args, charset):
-    """(train set, val set, train widths, val widths); widths drive batch bucketing."""
-    if len(args.data) == 1 and is_packed(args.data[0]):
-        root = args.data[0]
+def load_set(root: Path, charset):
+    """(dataset, approximate widths) of one packed dataset or ``labels.tsv`` folder."""
+    if is_packed(root):
         widths = np.load(root / "widths.npy")
-        order = list(range(len(widths)))
-        random.Random(0).shuffle(order)
-        val, train = order[:args.val_size], order[args.val_size:]
-        if args.limit:
-            train = train[:args.limit]
-        return (PackedLineDataset(root, train, charset), PackedLineDataset(root, val, charset),
-                [int(widths[i]) for i in train], [int(widths[i]) for i in val])
-
-    items = [item for root in args.data for item in read_labels(root)]
-    random.Random(0).shuffle(items)
-    val, train = items[:args.val_size], items[args.val_size:]
-    if args.limit:
-        train = train[:args.limit]
+        return PackedLineDataset(root, list(range(len(widths))), charset), [int(w) for w in widths]
+    items = read_labels(root)
     # Label length is a good proxy for line width.
-    return (LineDataset(train, charset), LineDataset(val, charset),
-            [len(t) for _, t in train], [len(t) for _, t in val])
+    return LineDataset(items, charset), [len(t) * 19 for _, t in items]  # ~19 px per character at line height 48
+
+
+def subset(data, widths, indices):
+    return Subset(data, indices), [widths[i] for i in indices]
+
+
+def build_datasets(args, charset):
+    """(train set, val set, train widths, val widths); widths drive batch bucketing.
+
+    Each ``--data`` entry may end in ``@K`` to use only K random lines of it,
+    and/or ``*N`` to repeat it N times (oversampling scarce real lines), as in
+    ``data/packed/synth@150000`` or ``data/packed/nt*3``. Without ``--val``,
+    ``--val-size`` lines of the first entry are held out.
+    """
+    train_sets, train_widths = [], []
+    val_sets, val_widths = [], []
+    for k, spec in enumerate(args.data):
+        spec, _, repeat = str(spec).partition("*")
+        path, _, take = spec.partition("@")
+        data, widths = load_set(Path(path), charset)
+        order = list(range(len(widths)))
+        if take:
+            order = sorted(random.Random(k).sample(order, min(int(take), len(order))))
+        if k == 0 and not args.val:
+            random.Random(0).shuffle(order)
+            held, order = order[:args.val_size], sorted(order[args.val_size:])
+            v, vw = subset(data, widths, held)
+            val_sets.append(v)
+            val_widths += vw
+        if args.limit:
+            order = order[:args.limit]
+        t, tw = subset(data, widths, order)
+        for _ in range(int(repeat or 1)):
+            train_sets.append(t)
+            train_widths += tw
+    for root in args.val or []:
+        v, vw = load_set(root, charset)
+        val_sets.append(v)
+        val_widths += vw
+    return ConcatDataset(train_sets), ConcatDataset(val_sets), train_widths, val_widths
 
 
 @torch.no_grad()
@@ -96,7 +123,8 @@ def save_weights(path: Path, model, charset, args, epoch: int, val_cer: float | 
 def main(argv: list[str] | None = None) -> None:
     sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--data", nargs="+", type=Path, required=True)
+    parser.add_argument("--data", nargs="+", required=True, help="datasets, each optionally PATH@K (K random lines) and/or *N (repeat N times)")
+    parser.add_argument("--val", nargs="+", type=Path, help="validation sets (default: held out from the first --data)")
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--epochs", type=int, default=4)
     # 32 keeps a 6 GB laptop GPU well inside its memory; spilling into shared memory is very slow.

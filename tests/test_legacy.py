@@ -47,6 +47,13 @@ def test_athanasius_postfix_overline_and_letters():
     assert layout.to_unicode("]\\'") == "ϣϩϧ"
 
 
+def test_athanasius_invisible_glyphs_are_dropped():
+    # The Kiahk Psalmody has empty quote glyphs, sometimes between a jinkim and its letter.
+    layout = get_layout("Athanasius")
+    assert layout.to_unicode("Anon ‘'a") == "Ⲁⲛⲟⲛ ϧⲁ"
+    assert layout.to_unicode("`‘'en") == f"ϧ{JINKIM}ⲉⲛ"
+
+
 @pytest.mark.parametrize("name", ["cs", "athanasius"])
 def test_round_trip(name):
     layout = get_layout(name)

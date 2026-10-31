@@ -43,6 +43,20 @@ class Charset:
             previous = i
         return from_visual("".join(out))
 
+    def decode_scored(self, indices, probs) -> tuple[str, list[float]]:
+        """Like :meth:`decode`, plus the confidence of each letter (peak frame probability)."""
+        out, scores, previous = [], [], 0
+        for i, p in zip(indices, probs):
+            i, p = int(i), float(p)
+            if i != 0 and i == previous:
+                scores[-1] = max(scores[-1], p)
+            elif i != 0:
+                out.append(self.symbols[i - 1])
+                scores.append(p)
+            previous = i
+        letters = [p for s, p in zip(out, scores) if s.lower() in LETTERS]
+        return from_visual("".join(out)), letters
+
 
 def to_visual(text: str) -> str:
     """Move every combining mark in front of its base letter."""
