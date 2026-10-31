@@ -14,7 +14,7 @@ import unicodedata
 import numpy as np
 from rapidfuzz.distance import Levenshtein
 
-from .corpus import is_coptic_letter
+from .corpus import OVERLINE, is_coptic_letter
 
 
 def letter_positions(text: str) -> list[int]:
@@ -72,6 +72,14 @@ def correct(reading: str, confidences: list[float], ref: str, max_rate: float = 
         return None
     if any(op.src_pos in (0, len(source) - 1) or op.src_pos == len(source) for op in ops):
         return None  # at the ends the matched reference span itself is uncertain
+    # Overlined words are abbreviations or numerals, which the reference spells out.
+    abbreviated = []
+    for word in reading.split():
+        abbreviated += [OVERLINE in word] * len(letters(word))
+    for op in ops:
+        near = [op.src_pos, op.src_pos - 1] if op.tag == "insert" else [op.src_pos]
+        if any(abbreviated[i] for i in near if 0 <= i < len(abbreviated)):
+            return None
     tags = [(op.tag, op.src_pos) for op in ops]
     for (tag, src), (tag2, src2) in zip(tags, tags[1:]):
         if tag == tag2 == "insert" and src == src2 or tag == tag2 == "delete" and src2 == src + 1:

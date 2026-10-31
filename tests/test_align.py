@@ -5,6 +5,7 @@ from copticocr.layout.projection import Box, find_lines, split_margin, text_left
 from copticocr.recog.charset import Charset
 
 JINKIM = "̀"
+OVERLINE = "̅"
 
 
 def test_letters_drop_marks_spaces_and_case():
@@ -37,6 +38,12 @@ def test_correct_refuses_to_overrule_a_confident_letter():
 def test_correct_rejects_runs_of_missing_letters():
     # An abbreviation (ⲓⲏ̅ⲥ̅) against the spelled-out word.
     assert correct("ⲛϫⲉ ⲓⲏⲥ", [0.5] * 6, "ⲛϫⲉⲓⲏⲥⲟⲩⲥ") is None
+
+
+def test_correct_leaves_abbreviations_alone():
+    # ⲡⲟ̅ⲥ̅ is printed for ⲡϭⲟⲓⲥ; the missing letters are not misreadings.
+    reading = f"ⲛ{JINKIM}ⲧⲉ ⲡⲟ{OVERLINE}ⲥ{OVERLINE} ⲁϥⲟⲩⲟⲛϩϥ"
+    assert correct(reading, [0.5] * 13, "ⲛⲧⲉⲡϭⲟⲓⲥⲁϥⲟⲩⲟⲛϩϥ") is None
 
 
 def test_decode_scored_gives_one_confidence_per_letter():
