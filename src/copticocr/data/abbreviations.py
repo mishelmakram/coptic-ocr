@@ -6,8 +6,7 @@ abbreviation stands for, so synthetic lines can show abbreviations and output
 can offer the full word for searching.
 
 Keys are full words without jinkim, in lowercase. A stem may also be
-abbreviated after a short prefix (an article or possessive), as in ⲙ̀ⲡⲟ̅ⲥ̅ or
-ⲡⲁⲟ̅ⲥ̅.
+abbreviated after an article or possessive, as in ⲙ̀ⲡⲟ̅ⲥ̅ or ⲡⲁⲟ̅ⲥ̅.
 """
 
 from __future__ import annotations
@@ -73,7 +72,9 @@ def _plain(text: str) -> str:
 
 _BY_WORD = {a.full: a for a in ABBREVIATIONS if not a.stem}
 _STEMS = [a for a in ABBREVIATIONS if a.stem]
-MAX_PREFIX = 4  # ⲙ̀ⲡⲉϥ-; longer ones are compounds such as ⲙⲉⲧϭⲟⲓⲥ
+# What may stand before an abbreviated stem: an article or possessive, perhaps after
+# ⲙ̀/ⲛ̀/ⲉ̀. Anything else is a compound (ⲙⲉⲧϭⲟⲓⲥ) or another word ending alike (ⲕⲟⲥⲙⲟⲥ).
+STEM_PREFIX = re.compile(r"[ⲙⲛⲉ]?(ⲡ|ⲡⲓ|ⲡⲁ|ⲡⲉ|ⲡⲉⲕ|ⲡⲉϥ|ⲡⲉⲥ|ⲡⲉⲛ|ⲡⲉⲧⲉⲛ|ⲡⲟⲩ|ⲧⲉ|ⲛⲉ|ⲛⲓ)?")
 _TRAILING = re.compile(r"[^\ẁ-ͯ]+$")
 
 
@@ -88,7 +89,7 @@ def abbreviate_word(word: str, rng: random.Random) -> str:
         short = rng.choice(_BY_WORD[plain].short)
         return (short[0].upper() + short[1:] if capital else short) + tail
     for a in _STEMS:
-        if plain.endswith(a.full) and 0 < len(plain) - len(a.full) <= MAX_PREFIX:
+        if plain.endswith(a.full) and plain != a.full and STEM_PREFIX.fullmatch(plain[:-len(a.full)]):
             # Keep the prefix as written (with its jinkim); only the stem changes.
             letters_kept = len(plain) - len(a.full)
             cut, seen = 0, 0

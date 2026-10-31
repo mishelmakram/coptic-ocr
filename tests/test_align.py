@@ -46,6 +46,12 @@ def test_correct_leaves_abbreviations_alone():
     assert correct(reading, [0.5] * 13, "ⲛⲧⲉⲡϭⲟⲓⲥⲁϥⲟⲩⲟⲛϩϥ") is None
 
 
+def test_correct_leaves_abbreviations_without_stroke_alone():
+    # The model missed the overline of ⲡⲟ̅ⲥ̅; the two missing letters are not misreadings.
+    assert correct("ⲛ̀ⲧⲉ ⲡⲟⲥ ⲁϥⲟⲩⲟⲛϩϥ", [0.5] * 11, "ⲛⲧⲉⲡϭⲟⲓⲥⲁϥⲟⲩⲟⲛϩϥ") is None
+    assert correct("ϫⲉ ⲡⲁⲟⲥ ⲁⲣⲓⲃⲟⲏⲑⲓⲛ", [0.5] * 14, "ϫⲉⲡⲁϭⲟⲓⲥⲁⲣⲓⲃⲟⲏⲑⲓⲛ") is None
+
+
 def test_decode_scored_gives_one_confidence_per_letter():
     charset = Charset.coptic()
     j, n, t = charset.encode(f"ⲛ{JINKIM}ⲧ")

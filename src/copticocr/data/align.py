@@ -14,7 +14,9 @@ import unicodedata
 import numpy as np
 from rapidfuzz.distance import Levenshtein
 
+from .abbreviations import ABBREVIATIONS, STEM_PREFIX
 from .corpus import OVERLINE, is_coptic_letter
+
 
 
 def letter_positions(text: str) -> list[int]:
@@ -24,6 +26,16 @@ def letter_positions(text: str) -> list[int]:
 def letters(text: str) -> str:
     """Lowercase Coptic letters only: what is compared with the reference."""
     return "".join(ch.lower() for ch in text if is_coptic_letter(ch))
+
+
+def is_short_form(word: str) -> bool:
+    """Whether bare letters spell a printed abbreviation, as when the model missed its stroke (ⲡⲟⲥ)."""
+    for a in ABBREVIATIONS:
+        for short in a.short:
+            short = letters(short)
+            if word == short or a.stem and word.endswith(short) and STEM_PREFIX.fullmatch(word[:-len(short)]):
+                return True
+    return False
 
 
 def codes(text: str) -> np.ndarray:
@@ -73,13 +85,19 @@ def correct(reading: str, confidences: list[float], ref: str, max_rate: float = 
     if any(op.src_pos in (0, len(source) - 1) or op.src_pos == len(source) for op in ops):
         return None  # at the ends the matched reference span itself is uncertain
     # Overlined words are abbreviations or numerals, which the reference spells out.
-    abbreviated = []
-    for word in reading.split():
-        abbreviated += [OVERLINE in word] * len(letters(word))
+    abbreviated, word_of = [], []
+    for k, word in enumerate(reading.split()):
+        bare = letters(word)
+        abbreviated += [OVERLINE in word or is_short_form(bare)] * len(bare)
+        word_of += [k] * len(bare)
     for op in ops:
         near = [op.src_pos, op.src_pos - 1] if op.tag == "insert" else [op.src_pos]
         if any(abbreviated[i] for i in near if 0 <= i < len(abbreviated)):
             return None
+    # Several letters missing from one word: an abbreviation the model read without its stroke.
+    inserted = [word_of[min(op.src_pos, len(word_of) - 1)] for op in ops if op.tag == "insert" and word_of]
+    if len(inserted) != len(set(inserted)):
+        return None
     tags = [(op.tag, op.src_pos) for op in ops]
     for (tag, src), (tag2, src2) in zip(tags, tags[1:]):
         if tag == tag2 == "insert" and src == src2 or tag == tag2 == "delete" and src2 == src + 1:
