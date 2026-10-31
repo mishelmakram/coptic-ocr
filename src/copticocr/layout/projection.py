@@ -89,7 +89,15 @@ def split_columns(ink: np.ndarray, lo: float = 0.35, hi: float = 0.75) -> tuple[
     profile = smooth(ink.sum(0).astype(float), 5)
     gap = widest_gap(profile, int(width * lo), int(width * hi), height * 0.002)
     if gap is None or gap[1] - gap[0] < width * 0.005:
-        return None
+        # A title or heading may run across the gutter: look instead for a strip that
+        # is blank in nearly every line of text, and somewhat wider than a word space.
+        bands = runs(ink.any(1))
+        if len(bands) < 4:
+            return None
+        crossed = np.mean([ink[s:e].any(0) for s, e in bands], axis=0)
+        gap = widest_gap(smooth(crossed, 5), int(width * lo), int(width * hi), 0.15)
+        if gap is None or gap[1] - gap[0] < width * 0.015:
+            return None
     top, bottom = int(rows[0]), int(rows[-1]) + 1
     return Box(int(cols[0]), top, int(gap[0]), bottom), Box(int(gap[1]), top, int(cols[-1]) + 1, bottom)
 
@@ -158,8 +166,14 @@ def text_left_edge(lines: list[Box]) -> int:
     if len(starts) < 3:
         return int(starts[0]) if len(starts) else 0
     jumps = np.diff(starts)
-    k = int(np.argmax(jumps))
-    span = starts[-1] - starts[0]
+    # The text edge is where a good share of lines start; a lone indented line
+    # (a centred title) must not be taken for it.
+    enough = max(2, 0.25 * len(starts))
+    candidates = [k for k in range(len(jumps)) if len(starts) - (k + 1) >= enough]
+    if not candidates:
+        return int(starts[0])
+    k = max(candidates, key=lambda i: jumps[i])
+    span = starts[int(len(starts) * 0.9)] - starts[0]
     if jumps[k] < max(20, span * 0.5):
         return int(starts[0])
     return int(starts[k + 1])

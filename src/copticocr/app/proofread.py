@@ -200,17 +200,20 @@ class ProofreadPanel(QWidget):
             card.edited.connect(self._on_edited)
             self.list.insertWidget(self.list.count() - 1, card)
             self._cards.append(card)
+        if not self._cards:
+            self.message.setText(tr("no_lines"))
+            self.message.show()
         if self._selected >= 0:
-            self.select(self._selected)
+            self.select(self._selected, switch_tab=False)  # stay on the tab the user chose
 
-    def select(self, index: int) -> None:
+    def select(self, index: int, switch_tab: bool = True) -> None:
         self._selected = index
         target = None
         for card in self._cards:
             card.set_selected(card.index == index)
             if card.index == index:
                 target = card
-        if target is None and self._result is not None and 0 <= index < len(self._result.lines):
+        if target is None and switch_tab and self._result is not None and 0 <= index < len(self._result.lines):
             # The line is on another tab: switch to the one showing its script.
             script = self._result.lines[index].script
             self.tabs.setCurrentIndex(0 if script == "coptic" else 1)

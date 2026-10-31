@@ -26,6 +26,7 @@ IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
 PDF_DPI = 300
 PAD = 6  # pixels kept around a line's ink when it is cut out
 COPTIC_MIN_CONFIDENCE = 0.6  # a column whose typical line reads worse is not Coptic
+COPTIC_LINE_CONFIDENCE = 0.85  # mean letter confidence below which a line in a Coptic column is not Coptic
 
 
 @dataclass
@@ -89,11 +90,19 @@ class Document:
                 return img.convert("L")
         doc = self._open.get(path) or self._open.setdefault(path, pymupdf.open(path))
         page = doc[number]
-        images = page.get_images()
+        images = page.get_image_info(xrefs=True)
         if len(images) == 1 and not page.get_text().strip():
-            pix = pymupdf.Pixmap(doc, images[0][0])  # a scan: take the image as stored
-            if pix.n - pix.alpha != 1:
-                pix = pymupdf.Pixmap(pymupdf.csGRAY, pix)
+            info = images[0]
+            bbox = pymupdf.Rect(info["bbox"])
+            if _fills(bbox, page.rect) and info["transform"][0] > 0 and info["transform"][3] > 0:
+                pix = pymupdf.Pixmap(doc, info["xref"])  # a scan filling the page: take it as stored
+                if pix.n - pix.alpha != 1:
+                    pix = pymupdf.Pixmap(pymupdf.csGRAY, pix)
+            else:
+                # Part of a larger scan (say one page of a two-page spread), rotated or
+                # shifted: render what the page shows, at the scan's own resolution.
+                dpi = min(400, max(150, 72 * info["width"] / max(bbox.width, 1)))
+                pix = page.get_pixmap(dpi=round(dpi), colorspace=pymupdf.csGRAY)
         else:
             pix = page.get_pixmap(dpi=PDF_DPI, colorspace=pymupdf.csGRAY)
         gray = np.frombuffer(pix.samples, np.uint8).reshape(pix.h, pix.stride)[:, :pix.w]
@@ -103,6 +112,13 @@ class Document:
         for doc in self._open.values():
             doc.close()
         self._open.clear()
+
+
+def _fills(bbox: pymupdf.Rect, page: pymupdf.Rect, tolerance: float = 0.02) -> bool:
+    """Whether an image placed at ``bbox`` covers the page, give or take a small margin."""
+    dx, dy = page.width * tolerance, page.height * tolerance
+    return (abs(bbox.x0 - page.x0) <= dx and abs(bbox.x1 - page.x1) <= dx
+            and abs(bbox.y0 - page.y0) <= dy and abs(bbox.y1 - page.y1) <= dy)
 
 
 def find_text_lines(gray: np.ndarray) -> list[list[TextLine]]:
@@ -155,8 +171,12 @@ class Engine:
         for column in columns:
             self._read_lines(gray, column)
             # The weakest letter of a Coptic line is still read well; Arabic lines are guesswork.
-            if np.median([line.confidence if line.text else 0.0 for line in column]) < COPTIC_MIN_CONFIDENCE:
-                for line in column:  # not Coptic: most likely the Arabic column
+            coptic_column = np.median([line.confidence if line.text else 0.0 for line in column]) \
+                >= COPTIC_MIN_CONFIDENCE
+            for line in column:
+                # Within a Coptic column a line read as guesswork is something else: an Arabic
+                # title running across both columns, an ornament.
+                if not coptic_column or not line.text or np.mean(line.confidences) < COPTIC_LINE_CONFIDENCE:
                     line.script, line.text, line.confidences = "arabic", "", []
             lines += column
         return PageResult(gray.size, lines)

@@ -68,6 +68,7 @@ STRINGS = {
     "not_read": ("هذه الصفحة لم تُقرأ بعد.", "This page has not been read yet."),
     "arabic_soon": ("التعرف على العربي سيُضاف قريبًا — يمكنك الكتابة يدويًا.",
                     "Arabic recognition is coming — you can type it in meanwhile."),
+    "no_lines": ("لا توجد سطور هنا في هذه الصفحة.", "No lines of this kind on this page."),
     "review": ("راجع", "Check"),
     "edited": ("معدّل", "Edited"),
     "export_title": ("تصدير", "Export"),

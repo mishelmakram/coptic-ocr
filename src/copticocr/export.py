@@ -11,6 +11,7 @@ import html
 from importlib import resources
 from pathlib import Path
 
+import numpy as np
 import pymupdf
 
 from .legacy import layout_for_font
@@ -141,11 +142,12 @@ def typeset_page(out: pymupdf.Document, image, result: PageResult, size: tuple[f
     from PIL import ImageDraw
 
     background = image.convert("L").copy()
+    paper = int(np.percentile(np.asarray(background), 90))  # photos and old scans are not white
     draw = ImageDraw.Draw(background)
     lines = [line for line in result.lines if line.script == "coptic" and line.text.strip()]
     for line in lines:
         b = line.box
-        draw.rectangle((b.x0 - 3, b.y0 - 3, b.x1 + 3, b.y1 + 3), fill=255)
+        draw.rectangle((b.x0 - 3, b.y0 - 3, b.x1 + 3, b.y1 + 3), fill=paper)
     page = out.new_page(width=size[0], height=size[1])
     page.insert_image(page.rect, pixmap=_pixmap(background))
     if not lines:
