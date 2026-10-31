@@ -18,7 +18,8 @@ def test_long_prefixes_are_compounds_not_articles():
 
 
 def test_capital_and_punctuation_survive():
-    assert abbreviate_word(f"Ⲓⲏⲥⲟⲩⲥ.", random.Random(0)) == f"Ⲓ{OVERLINE}ⲏ{OVERLINE}ⲥ{OVERLINE}."
+    assert abbreviate_word("Ⲓⲏⲥⲟⲩⲥ.", random.Random(0)) in (f"Ⲓ{OVERLINE}ⲏ{OVERLINE}ⲥ{OVERLINE}.",
+                                                               f"Ⲓⲏ{OVERLINE}ⲥ{OVERLINE}.")
 
 
 def test_words_without_abbreviation_are_unchanged():

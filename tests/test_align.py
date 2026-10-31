@@ -36,20 +36,53 @@ def test_correct_refuses_to_overrule_a_confident_letter():
 
 
 def test_correct_rejects_runs_of_missing_letters():
-    # An abbreviation (ⲓⲏ̅ⲥ̅) against the spelled-out word.
-    assert correct("ⲛϫⲉ ⲓⲏⲥ", [0.5] * 6, "ⲛϫⲉⲓⲏⲥⲟⲩⲥ") is None
+    # A word cut short (a bad crop or a ligature) is not corrected.
+    assert correct("ⲛϫⲉ ⲡⲉⲛⲓ", [0.5] * 7, "ⲛϫⲉⲡⲉⲛⲓⲱⲧ") is None
 
 
-def test_correct_leaves_abbreviations_alone():
-    # ⲡⲟ̅ⲥ̅ is printed for ⲡϭⲟⲓⲥ; the missing letters are not misreadings.
+def test_correct_takes_an_unmarked_abbreviation_with_its_stroke():
+    assert correct("ⲛϫⲉ ⲓⲏⲥ ⲁϥϫⲟⲥ", [0.5] * 9, "ⲛϫⲉⲓⲏⲥⲟⲩⲥⲁϥϫⲟⲥ") == "ⲛϫⲉ ⲓⲏ̅ⲥ̅ ⲁϥϫⲟⲥ"
+
+
+def test_correct_keeps_abbreviations_as_printed():
+    # ⲡⲟ̅ⲥ̅ is printed for ⲡϭⲟⲓⲥ; the letters it leaves out are not misreadings.
     reading = f"ⲛ{JINKIM}ⲧⲉ ⲡⲟ{OVERLINE}ⲥ{OVERLINE} ⲁϥⲟⲩⲟⲛϩϥ"
-    assert correct(reading, [0.5] * 13, "ⲛⲧⲉⲡϭⲟⲓⲥⲁϥⲟⲩⲟⲛϩϥ") is None
+    assert correct(reading, [0.5] * 13, "ⲛⲧⲉⲡϭⲟⲓⲥⲁϥⲟⲩⲟⲛϩϥ") == reading
 
 
-def test_correct_leaves_abbreviations_without_stroke_alone():
-    # The model missed the overline of ⲡⲟ̅ⲥ̅; the two missing letters are not misreadings.
-    assert correct("ⲛ̀ⲧⲉ ⲡⲟⲥ ⲁϥⲟⲩⲟⲛϩϥ", [0.5] * 11, "ⲛⲧⲉⲡϭⲟⲓⲥⲁϥⲟⲩⲟⲛϩϥ") is None
-    assert correct("ϫⲉ ⲡⲁⲟⲥ ⲁⲣⲓⲃⲟⲏⲑⲓⲛ", [0.5] * 14, "ϫⲉⲡⲁϭⲟⲓⲥⲁⲣⲓⲃⲟⲏⲑⲓⲛ") is None
+def test_correct_puts_back_a_missed_stroke():
+    expected = f"ϫⲉ ⲡⲁⲟ{OVERLINE}ⲥ{OVERLINE} ⲁⲣⲓⲃⲟⲏⲑⲓⲛ"
+    assert correct("ϫⲉ ⲡⲁⲟⲥ ⲁⲣⲓⲃⲟⲏⲑⲓⲛ", [0.5] * 14, "ϫⲉⲡⲁϭⲟⲓⲥⲁⲣⲓⲃⲟⲏⲑⲓⲛ") == expected
+
+
+def test_correct_still_fixes_other_words_beside_an_abbreviation():
+    reading = f"ⲛ{JINKIM}ⲧⲉ ⲓⲏ{OVERLINE}ⲥ{OVERLINE} ⲁϥⲟⲩⲟⲛϩϥ ⲛⲁⲩ"
+    confidences = [0.99] * 17
+    confidences[10] = 0.4  # the ⲉ misread for ⲟ in ⲁϥⲟⲩⲟⲛϩϥ
+    wrong = reading.replace("ⲟⲩⲟⲛ", "ⲟⲩⲉⲛ")
+    assert correct(wrong, confidences, "ⲛⲧⲉⲓⲏⲥⲟⲩⲥⲁϥⲟⲩⲟⲛϩϥⲛⲁⲩ") == reading
+
+
+def test_correct_evens_out_a_partly_seen_stroke():
+    reading = f"ϫⲉ ⲡⲉⲛⲟ{OVERLINE}ⲥ ⲁⲣⲓⲃⲟⲏⲑⲓⲛ"
+    assert correct(reading, [0.5] * 15, "ϫⲉⲡⲉⲛϭⲟⲓⲥⲁⲣⲓⲃⲟⲏⲑⲓⲛ") == f"ϫⲉ ⲡⲉⲛⲟ{OVERLINE}ⲥ{OVERLINE} ⲁⲣⲓⲃⲟⲏⲑⲓⲛ"
+    # This Bible strokes ⲏⲥ of ⲓⲏ̅ⲥ̅; a stroke seen over ⲏ alone keeps that form.
+    assert correct(f"ⲛϫⲉ ⲓⲏ{OVERLINE}ⲥ ⲁϥϫⲟⲥ", [0.5] * 9, "ⲛϫⲉⲓⲏⲥⲟⲩⲥⲁϥϫⲟⲥ") == f"ⲛϫⲉ ⲓⲏ{OVERLINE}ⲥ{OVERLINE} ⲁϥϫⲟⲥ"
+
+
+def test_correct_rejects_strokes_that_are_not_numerals():
+    assert correct(f"ⲇ{OVERLINE}ⲉ ⲙⲙⲟⲛϯ ϩⲙⲟⲧ ⲅⲁⲣ", [0.9] * 12, "ⲙⲙⲟⲛϯϩⲙⲟⲧⲅⲁⲣ") is None
+    assert correct(f"ⲁ{OVERLINE}{OVERLINE} ⲟⲩⲟϩ ⲁϥⲓ ⲛϫⲉ", [0.9] * 10, "ⲟⲩⲟϩⲁϥⲓⲛϫⲉ") is None
+
+
+def test_correct_skips_numerals():
+    reading = f"ⲃ{OVERLINE} ⲟⲩⲟϩ ⲁϥⲟⲩⲟⲛϩϥ ⲛⲁⲩ"
+    assert correct(reading, [0.9] * 15, "ⲟⲩⲟϩⲁϥⲟⲩⲟⲛϩϥⲛⲁⲩ") == reading
+
+
+def test_correct_rejects_an_abbreviation_missing_from_the_reference():
+    reading = f"ⲛ{JINKIM}ⲧⲉ ⲡⲟ{OVERLINE}ⲥ{OVERLINE} ⲁϥⲟⲩⲟⲛϩϥ"
+    assert correct(reading, [0.5] * 13, "ⲛⲧⲉⲫⲛⲟⲩϯⲁϥⲟⲩⲟⲛϩϥ") is None
 
 
 def test_decode_scored_gives_one_confidence_per_letter():

@@ -36,8 +36,9 @@ ABBREVIATIONS = [
     Abbreviation("ⲫⲛⲟⲩϯ", ("ⲫϯ",), stem=True),
     Abbreviation("ⲑⲉⲟⲥ", (over("ⲑⲥ"),)),
     Abbreviation("ⲑⲉⲟⲩ", (over("ⲑⲩ"),)),
-    Abbreviation("ⲓⲏⲥⲟⲩⲥ", (over("ⲓⲏⲥ"),)),
-    Abbreviation("ⲡⲓⲭⲣⲓⲥⲧⲟⲥ", (over("ⲡⲭⲥ"),)),
+    Abbreviation("ⲓⲏⲥⲟⲩⲥ", (over("ⲓⲏⲥ"), "ⲓ" + over("ⲏⲥ"))),
+    Abbreviation("ⲡⲓⲭⲣⲓⲥⲧⲟⲥ", (over("ⲡⲭⲥ"), "ⲡ" + over("ⲭⲥ"))),
+    Abbreviation("ⲭⲣⲓⲥⲧⲟⲥ", (over("ⲭⲥ"),), stem=True),
     Abbreviation("ⲡⲛⲉⲩⲙⲁ", (over("ⲡⲛⲁ"),), stem=True),
     # Names and books
     Abbreviation("ⲓⲱⲁⲛⲛⲏⲥ", (over("ⲓⲱⲁ"),)),
@@ -104,6 +105,24 @@ def abbreviate_word(word: str, rng: random.Random) -> str:
             short = rng.choice(a.short)
             return (short[0].upper() + short[1:] if capital else short) + tail
     return word
+
+
+PREPOSITION = re.compile(r"[ⲙⲛⲉ]?")  # what may stand before a whole-word abbreviation (ⲙ̀ⲡⲭ̅ⲥ̅)
+
+
+def match(bare: str) -> tuple[Abbreviation, str] | None:
+    """The abbreviation that bare letters spell (ⲙⲡⲟⲥ -> ϭⲟⲓⲥ, ⲟ̅ⲥ̅), with or without its stroke."""
+    best = None
+    for a in ABBREVIATIONS:
+        for short in a.short:
+            letters = short.replace(OVERLINE, "")
+            if not bare.endswith(letters):
+                continue
+            prefix = bare[:len(bare) - len(letters)]
+            if (STEM_PREFIX if a.stem else PREPOSITION).fullmatch(prefix):
+                if best is None or len(letters) > len(best[1].replace(OVERLINE, "")):
+                    best = (a, short)
+    return best
 
 
 def abbreviate(text: str, rng: random.Random, rate: float = 1.0) -> str:
