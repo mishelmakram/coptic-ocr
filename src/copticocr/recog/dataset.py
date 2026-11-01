@@ -17,9 +17,14 @@ MAX_WIDTH = 1600
 PAD_TO = 64
 
 
-def load_image(img: Image.Image) -> torch.Tensor:
-    """Grayscale line -> (1, HEIGHT, W) float tensor, ink = 1, paper = 0."""
+def load_image(img: Image.Image, mirror: bool = False) -> torch.Tensor:
+    """Grayscale line -> (1, HEIGHT, W) float tensor, ink = 1, paper = 0.
+
+    ``mirror`` flips a right-to-left line so it is read from its first letter.
+    """
     img = img.convert("L")
+    if mirror:
+        img = img.transpose(Image.FLIP_LEFT_RIGHT)
     width = min(MAX_WIDTH, max(HEIGHT, round(img.width * HEIGHT / img.height)))
     img = img.resize((width, HEIGHT), Image.BILINEAR)
     pixels = 1.0 - np.asarray(img, dtype=np.float32) / 255.0
@@ -45,7 +50,7 @@ class LineDataset(Dataset):
     def __getitem__(self, i: int):
         path, text = self.items[i]
         with Image.open(path) as img:
-            return load_image(img), torch.tensor(self.charset.encode(text), dtype=torch.long), text
+            return load_image(img, self.charset.rtl), torch.tensor(self.charset.encode(text), dtype=torch.long), text
 
 
 def collate(batch):

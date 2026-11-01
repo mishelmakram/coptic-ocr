@@ -40,9 +40,9 @@ class Reader(QThread):
     page_read = Signal(int, object)  # page index, PageResult
     page_failed = Signal(int, str)
 
-    def __init__(self, paths: list[Path], checkpoint: Path, device: str | None):
+    def __init__(self, paths: list[Path], checkpoint: Path, device: str | None, arabic: Path | None = None):
         super().__init__()
-        self.paths, self.checkpoint, self.device = paths, checkpoint, device
+        self.paths, self.checkpoint, self.device, self.arabic = paths, checkpoint, device, arabic
         self._queue: queue.Queue[int | None] = queue.Queue()
 
     def submit(self, indices: list[int]) -> None:
@@ -64,7 +64,7 @@ class Reader(QThread):
 
     def run(self) -> None:
         try:
-            engine = Engine(self.checkpoint, self.device)
+            engine = Engine(self.checkpoint, self.device, arabic_checkpoint=self.arabic)
         except Exception as error:  # noqa: BLE001 - shown to the user
             self.failed_to_start.emit(str(error))
             return

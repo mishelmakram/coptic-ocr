@@ -15,12 +15,15 @@ from pathlib import Path
 import numpy as np
 import pymupdf
 
-from .export import UNICODE_FONT, bundled_font, coptic_text, page_size
+from .export import UNICODE_FONT, arabic_pdf_font, bundled_font, coptic_text, page_size
 from .layout.projection import binarize, remove_rules
 from .pipeline import Document, PageResult, TextLine, crop
 from .structure import Row, line_rows, stanza_rows
 
 FONT_SIZE = 14  # points, for the Coptic text
+ARABIC_FONT = "Simplified Arabic"  # on every Windows; Arabic type runs smaller than Coptic at one size
+ARABIC_SCALE = 1.2
+
 LINE_SPACING = 1.35
 
 
@@ -118,13 +121,23 @@ def to_docx_book(doc: Document, results: list[PageResult | None], path: Path,
                 paragraph = cell.paragraphs[0]
                 paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 paragraph.paragraph_format.space_after = Pt(6)
-                _add_picture(paragraph, crop(image, _title_box(row)), scale, usable)
+                if row.title_text:
+                    _arabic_run(paragraph, row.title_text, FONT_SIZE * ARABIC_SCALE * 1.15, bold=True)
+                else:
+                    _add_picture(paragraph, crop(image, _title_box(row)), scale, usable)
                 continue
             if row.coptic:
                 paragraph = cells[0].paragraphs[0]
                 paragraph.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
                 paragraph.paragraph_format.space_after = Pt(8)
                 _coptic_run(paragraph, coptic_text(row.coptic_text, coptic_font), coptic_font)
+            if row.arabic_text:
+                paragraph = cells[1].paragraphs[0]
+                paragraph.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+                paragraph.paragraph_format.right_to_left = True
+                paragraph.paragraph_format.space_after = Pt(8)
+                _arabic_run(paragraph, row.arabic_text, FONT_SIZE * ARABIC_SCALE)
+                continue
             for k, line in enumerate(row.arabic):
                 paragraph = cells[1].paragraphs[0] if k == 0 else cells[1].add_paragraph()
                 paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
@@ -143,6 +156,26 @@ def _coptic_run(paragraph, text: str, font: str) -> None:
     fonts = run._element.get_or_add_rPr().get_or_add_rFonts()
     for attr in ("w:ascii", "w:hAnsi", "w:cs", "w:eastAsia"):  # Word picks a font per character class
         fonts.set(qn(attr), font)
+
+
+def _arabic_run(paragraph, text: str, size: float, bold: bool = False) -> None:
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    from docx.shared import Pt
+
+    run = paragraph.add_run(text)
+    run.font.rtl = True
+    run.font.size = Pt(size)
+    run.font.bold = bold
+    properties = run._element.get_or_add_rPr()
+    fonts = properties.get_or_add_rFonts()
+    for attr in ("w:ascii", "w:hAnsi", "w:cs"):
+        fonts.set(qn(attr), ARABIC_FONT)
+    for tag in ("w:szCs",) + (("w:bCs",) if bold else ()):  # Word sizes right-to-left text separately
+        element = OxmlElement(tag)
+        if tag == "w:szCs":
+            element.set(qn("w:val"), str(round(size * 2)))
+        properties.append(element)
 
 
 def _add_picture(paragraph, image, points_per_pixel: float, max_width) -> None:
@@ -191,6 +224,8 @@ def to_pdf_book(doc: Document, results: list[PageResult | None], path: Path, sta
     """
     font = bundled_font()
     archive = pymupdf.Archive(str(font.parent))
+    arabic_file = arabic_pdf_font()
+    arabic_archive = pymupdf.Archive(str(arabic_file.parent)) if arabic_file else None
     out = pymupdf.open()
     scratch = pymupdf.open()
     ruler = scratch.new_page(width=1000, height=10000)
@@ -210,6 +245,12 @@ def to_pdf_book(doc: Document, results: list[PageResult | None], path: Path, sta
             css = (f"@font-face {{font-family: coptic; src: url({font.name});}} "
                    f"* {{font-family: coptic; font-size: {size:.1f}pt; line-height: {LINE_SPACING}; "
                    "margin: 0; text-align: justify;}")
+            arabic_css = None
+            if arabic_file is not None:
+                arabic_css = (f"@font-face {{font-family: arabic; src: url({arabic_file.name});}} "
+                              f"* {{font-family: arabic; font-size: {size * ARABIC_SCALE:.1f}pt; "
+                              f"line-height: {LINE_SPACING}; margin: 0; text-align: justify;}} "
+                              "p.title {text-align: center; font-weight: bold;}")
             page, y = out.new_page(width=width, height=height), area.y0
 
             def room(needed: float) -> None:
@@ -217,7 +258,20 @@ def to_pdf_book(doc: Document, results: list[PageResult | None], path: Path, sta
                 if y + needed > area.y1 and y > area.y0:
                     page, y = out.new_page(width=width, height=height), area.y0
 
+            def measure(html_text: str, w: float, style: str, fonts: pymupdf.Archive) -> float:
+                ruler.clean_contents()
+                spare, _ = ruler.insert_htmlbox(pymupdf.Rect(0, 0, w, 10000), html_text, css=style, archive=fonts)
+                return 10000 - spare
+
             for row in page_rows(result, stanzas):
+                if row.is_title and row.title_text and arabic_css:
+                    body = f'<p class="title" dir="rtl">{html.escape(row.title_text)}</p>'
+                    h = measure(body, area.width, arabic_css, arabic_archive)
+                    room(h)
+                    page.insert_htmlbox(pymupdf.Rect(area.x0, y, area.x1, y + h + 2), body, css=arabic_css,
+                                        archive=arabic_archive)
+                    y += h + ROW_GAP / 2
+                    continue
                 if row.is_title:
                     picture = crop(image, row.box)
                     w, h = _fit(picture, scale, area.width)
@@ -230,17 +284,24 @@ def to_pdf_book(doc: Document, results: list[PageResult | None], path: Path, sta
                 coptic_width = divider - GUTTER - area.x0
                 text_height = 0.0
                 if text:
-                    ruler.clean_contents()
-                    spare, _ = ruler.insert_htmlbox(pymupdf.Rect(0, 0, coptic_width, 10000), text, css=css,
-                                                    archive=archive)
-                    text_height = 10000 - spare
-                pictures = [crop(image, line.box) for line in row.arabic]
-                sizes = [_fit(p, scale, area.x1 - divider - GUTTER) for p in pictures]
-                row_height = max(text_height, sum(h for _, h in sizes))
+                    text_height = measure(text, coptic_width, css, archive)
+                arabic_body = None
+                if row.arabic_text and arabic_css:
+                    arabic_body = f'<p dir="rtl">{html.escape(row.arabic_text)}</p>'
+                    pictures, sizes = [], []
+                    arabic_height = measure(arabic_body, area.x1 - divider - GUTTER, arabic_css, arabic_archive)
+                else:
+                    pictures = [crop(image, line.box) for line in row.arabic]
+                    sizes = [_fit(p, scale, area.x1 - divider - GUTTER) for p in pictures]
+                    arabic_height = sum(h for _, h in sizes)
+                row_height = max(text_height, arabic_height)
                 room(row_height)
                 if text:
                     page.insert_htmlbox(pymupdf.Rect(area.x0, y, divider - GUTTER, y + text_height + 2), text,
                                         css=css, archive=archive)
+                if arabic_body:
+                    page.insert_htmlbox(pymupdf.Rect(divider + GUTTER, y, area.x1, y + arabic_height + 2),
+                                        arabic_body, css=arabic_css, archive=arabic_archive)
                 top = y
                 for picture, (w, h) in zip(pictures, sizes):
                     page.insert_image(pymupdf.Rect(area.x1 - w, top, area.x1, top + h), stream=_png(picture))

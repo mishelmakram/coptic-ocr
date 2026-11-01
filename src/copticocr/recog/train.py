@@ -114,6 +114,7 @@ def save_weights(path: Path, model, charset, args, epoch: int, val_cer: float | 
     torch.save({
         "model": model.state_dict(),
         "symbols": charset.symbols,
+        "script": charset.script,
         "hidden": args.hidden,
         "epoch": epoch,
         "val_cer": val_cer,
@@ -138,12 +139,13 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--resume", action="store_true", help="continue from --out/state.pt")
     parser.add_argument("--init", type=Path, help="start from these weights (fine-tuning)")
     parser.add_argument("--limit", type=int, help="use only this many training lines (smoke tests)")
+    parser.add_argument("--script", choices=["coptic", "arabic"], default="coptic")
     args = parser.parse_args(argv)
 
     keep_system_awake()
     torch.manual_seed(0)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    charset = Charset.coptic()
+    charset = Charset.for_script(args.script)
 
     train_set, val_set, train_widths, val_widths = build_datasets(args, charset)
     print(f"device {device}, {len(train_set)} train / {len(val_set)} val lines, {len(charset)} classes")

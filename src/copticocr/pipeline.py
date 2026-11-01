@@ -27,6 +27,7 @@ PDF_DPI = 300
 PAD = 6  # pixels kept around a line's ink when it is cut out
 COPTIC_MIN_CONFIDENCE = 0.6  # a column whose typical line reads worse is not Coptic
 COPTIC_LINE_CONFIDENCE = 0.85  # mean letter confidence below which a line in a Coptic column is not Coptic
+ARABIC_MIN_CONFIDENCE = 0.5  # an Arabic reading less certain than this is left empty (an ornament, a stain)
 
 
 @dataclass
@@ -155,10 +156,12 @@ def crop(gray: Image.Image, box: Box) -> Image.Image:
 class Engine:
     """Layout analysis plus line recognition, for one page at a time."""
 
-    def __init__(self, checkpoint: str | Path, device: str | None = None, batch: int = 32):
+    def __init__(self, checkpoint: str | Path, device: str | None = None, batch: int = 32,
+                 arabic_checkpoint: str | Path | None = None):
         from .recog.infer import Recognizer  # torch is slow to import; only load it when reading
 
         self.recognizer = Recognizer(checkpoint, device)
+        self.arabic = Recognizer(arabic_checkpoint, device) if arabic_checkpoint else None
         self.batch = batch
 
     @property
@@ -180,10 +183,17 @@ class Engine:
                 if not coptic_column or not line.text or np.mean(line.confidences) < COPTIC_LINE_CONFIDENCE:
                     line.script, line.text, line.confidences = "arabic", "", []
             lines += column
+        if self.arabic is not None:
+            arabic = [line for line in lines if line.script == "arabic"]
+            self._read_lines(gray, arabic, self.arabic)
+            for line in arabic:
+                if not line.confidences or np.mean(line.confidences) < ARABIC_MIN_CONFIDENCE:
+                    line.text, line.confidences = "", []
         return PageResult(gray.size, lines)
 
-    def _read_lines(self, gray: Image.Image, lines: list[TextLine]) -> None:
+    def _read_lines(self, gray: Image.Image, lines: list[TextLine], recognizer=None) -> None:
+        recognizer = recognizer or self.recognizer
         for i in range(0, len(lines), self.batch):
             chunk = lines[i:i + self.batch]
-            for line, (text, conf) in zip(chunk, self.recognizer.recognize_batch([crop(gray, l.box) for l in chunk])):
+            for line, (text, conf) in zip(chunk, recognizer.recognize_batch([crop(gray, l.box) for l in chunk])):
                 line.text, line.confidences = text, conf

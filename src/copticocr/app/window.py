@@ -34,12 +34,13 @@ def typeset_preview(image, result: PageResult):
         return Image.frombytes("L", (pix.width, pix.height), pix.samples)
 
 
-def default_checkpoint() -> Path | None:
-    """$COPTICOCR_MODEL, else the newest ``models/*/best.pt`` next to the program."""
-    if os.environ.get("COPTICOCR_MODEL"):
-        return Path(os.environ["COPTICOCR_MODEL"])
+def default_checkpoint(script: str = "coptic") -> Path | None:
+    """$COPTICOCR_MODEL (or $COPTICOCR_ARABIC_MODEL), else the newest ``models/<script>-*/best.pt``."""
+    variable = "COPTICOCR_MODEL" if script == "coptic" else "COPTICOCR_ARABIC_MODEL"
+    if os.environ.get(variable):
+        return Path(os.environ[variable])
     for root in Path(__file__).resolve().parents:
-        found = sorted((root / "models").glob("*/best.pt"), key=lambda p: p.stat().st_mtime)
+        found = sorted((root / "models").glob(f"{script}-*/best.pt"), key=lambda p: p.stat().st_mtime)
         if found:
             return found[-1]
     return None
@@ -388,7 +389,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, tr("app_name"), tr("no_model"))
             return False
         device = "cpu" if self.cpu_action.isChecked() else os.environ.get("COPTICOCR_DEVICE")
-        self.reader = Reader(self.doc.paths, self.checkpoint, device)
+        self.reader = Reader(self.doc.paths, self.checkpoint, device, default_checkpoint("arabic"))
         self.reader.ready.connect(self._reader_ready)
         self.reader.failed_to_start.connect(self._reader_failed)
         self.reader.page_read.connect(self._page_read)

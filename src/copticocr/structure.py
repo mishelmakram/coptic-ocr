@@ -34,6 +34,20 @@ class Row:
         return join_lines(line.text for line in self.coptic)
 
     @property
+    def arabic_text(self) -> str | None:
+        """The Arabic as text, or None if a line of it was not read (it is then shown as a picture)."""
+        if not self.arabic or any(not line.text.strip() for line in self.arabic):
+            return None
+        return " ".join(line.text.strip() for line in self.arabic)
+
+    @property
+    def title_text(self) -> str | None:
+        """A title's text, its pieces right to left (titles are Arabic), or None if a piece was not read."""
+        if not self.title or any(not line.text.strip() for line in self.title):
+            return None
+        return " ".join(line.text.strip() for line in sorted(self.title, key=lambda l: -l.box.x0))
+
+    @property
     def box(self) -> Box:
         lines = self.title or self.coptic + self.arabic
         return Box(min(l.box.x0 for l in lines), min(l.box.y0 for l in lines),

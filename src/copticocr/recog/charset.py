@@ -10,28 +10,52 @@ from __future__ import annotations
 
 import unicodedata
 
+from .. import arabic
+
 LETTERS = "ⲁⲃⲅⲇⲉⲋⲍⲏⲑⲓⲕⲗⲙⲛⲝⲟⲡⲣⲥⲧⲩⲫⲭⲯⲱϣϥϧϩϫϭϯ"
 MARKS = "̀́̅"  # jinkim, acute jinkim, supralinear stroke
 PUNCTUATION = " :.-,;·"
 
 
 class Charset:
-    """Maps symbols to class indices; index 0 is the CTC blank."""
+    """Maps symbols to class indices; index 0 is the CTC blank.
 
-    def __init__(self, symbols: str):
+    Coptic is trained in visual order (a jinkim before its letter). Arabic is read
+    from a mirrored line image, so its text keeps logical order with marks after
+    their letter (``rtl``).
+    """
+
+    def __init__(self, symbols: str, script: str = "coptic"):
         self.symbols = symbols
+        self.script = script
+        self.rtl = script == "arabic"
+        self.letters = set(arabic.LETTERS) if self.rtl else set(LETTERS)
         self.index = {s: i + 1 for i, s in enumerate(symbols)}
 
     @classmethod
     def coptic(cls) -> Charset:
         return cls(LETTERS + LETTERS.upper() + MARKS + PUNCTUATION)
 
+    @classmethod
+    def arabic(cls) -> Charset:
+        return cls(arabic.LETTERS + arabic.MARKS + arabic.DIGITS + arabic.PUNCTUATION, "arabic")
+
+    @classmethod
+    def for_script(cls, script: str) -> Charset:
+        return cls.arabic() if script == "arabic" else cls.coptic()
+
+    def _order(self, text: str) -> str:
+        return text if self.rtl else to_visual(text)
+
+    def _unorder(self, text: str) -> str:
+        return text if self.rtl else from_visual(text)
+
     def __len__(self) -> int:
         return len(self.symbols) + 1
 
     def encode(self, text: str) -> list[int]:
         """Unicode text -> class indices in visual order. Unknown symbols are dropped."""
-        return [self.index[s] for s in to_visual(text) if s in self.index]
+        return [self.index[s] for s in self._order(text) if s in self.index]
 
     def decode(self, indices) -> str:
         """Greedy CTC decoding: merge repeats, drop blanks, back to Unicode order."""
@@ -41,7 +65,7 @@ class Charset:
             if i != previous and i != 0:
                 out.append(self.symbols[i - 1])
             previous = i
-        return from_visual("".join(out))
+        return self._unorder("".join(out))
 
     def decode_scored(self, indices, probs) -> tuple[str, list[float]]:
         """Like :meth:`decode`, plus the confidence of each letter (peak frame probability)."""
@@ -54,8 +78,8 @@ class Charset:
                 out.append(self.symbols[i - 1])
                 scores.append(p)
             previous = i
-        letters = [p for s, p in zip(out, scores) if s.lower() in LETTERS]
-        return from_visual("".join(out)), letters
+        letters = [p for s, p in zip(out, scores) if s.lower() in self.letters]
+        return self._unorder("".join(out)), letters
 
 
 def to_visual(text: str) -> str:

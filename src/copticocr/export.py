@@ -112,13 +112,22 @@ def to_searchable_pdf(doc: Document, results: list[PageResult | None], path: Pat
 
 
 def add_hidden_text(page: pymupdf.Page, result: PageResult, image) -> None:
-    """Lay the recognized Coptic invisibly over its print, word by word where the words can be told apart."""
+    """Lay the recognized text invisibly over its print: Coptic word by word where the words can be
+    told apart, Arabic a line at a time (shaped, so it copies out right to left)."""
     font_file = bundled_font()
     font = pymupdf.Font(fontfile=str(font_file))
     page.insert_font(fontname="coptic", fontfile=str(font_file))
     scale = page.rect.width / result.size[0]
     ink = binarize(np.asarray(image.convert("L")))
+    arabic_font = arabic_pdf_font()
     for line in result.lines:
+        if line.script == "arabic" and line.text.strip() and arabic_font is not None:
+            b = line.box
+            rect = pymupdf.Rect(b.x0 * scale, b.y0 * scale, b.x1 * scale, b.y1 * scale)
+            page.insert_htmlbox(rect, f'<p dir="rtl">{html.escape(line.text)}</p>',
+                                css=_arabic_css(arabic_font, rect.height * 0.7, "text-align: justify;"),
+                                archive=pymupdf.Archive(str(arabic_font.parent)), scale_low=0, opacity=0)
+            continue
         if line.script != "coptic" or not line.text.strip():
             continue
         height = line.box.height * scale
@@ -145,11 +154,25 @@ def page_size(doc: Document, index: int, image) -> tuple[float, float]:
     return image.width * 72 / dpi, image.height * 72 / dpi
 
 
-def typeset_page(out: pymupdf.Document, image, result: PageResult, size: tuple[float, float]) -> pymupdf.Page:
-    """Add a page where every recognized Coptic line is set in type where it was printed.
+ARABIC_PDF_FONTS = [Path("C:/Windows/Fonts") / name for name in ("times.ttf", "arial.ttf", "tahoma.ttf")]
 
-    Everything else on the page (Arabic, verse numbers, running heads) is kept from
-    the scan, as an image, until it can be recognized too.
+
+def arabic_pdf_font() -> Path | None:
+    """A font whose shaped Arabic copies out of a PDF as text (Simplified Arabic's copies out garbage)."""
+    return next((path for path in ARABIC_PDF_FONTS if path.exists()), None)
+
+
+def _arabic_css(font: Path, size: float, extra: str = "") -> str:
+    return (f"@font-face {{font-family: arabic; src: url({font.name});}} "
+            f"* {{font-family: arabic; font-size: {size:.2f}px; white-space: nowrap; margin: 0; "
+            f"line-height: 1.3; {extra}}}")
+
+
+def typeset_page(out: pymupdf.Document, image, result: PageResult, size: tuple[float, float]) -> pymupdf.Page:
+    """Add a page where every recognized line is set in type where it was printed.
+
+    Whatever was not read (verse numbers, running heads, Arabic when no Arabic
+    model is installed) is kept from the scan, as an image.
     """
     from PIL import ImageDraw
 
@@ -157,14 +180,26 @@ def typeset_page(out: pymupdf.Document, image, result: PageResult, size: tuple[f
     paper = int(np.percentile(np.asarray(background), 90))  # photos and old scans are not white
     draw = ImageDraw.Draw(background)
     lines = [line for line in result.lines if line.script == "coptic" and line.text.strip()]
-    for line in lines:
+    arabic_font = arabic_pdf_font()
+    arabic = [line for line in result.lines if line.script == "arabic" and line.text.strip()] if arabic_font else []
+    for line in lines + arabic:
         b = line.box
         draw.rectangle((b.x0 - 3, b.y0 - 3, b.x1 + 3, b.y1 + 3), fill=paper)
     page = out.new_page(width=size[0], height=size[1])
     page.insert_image(page.rect, pixmap=_pixmap(background))
+    scale = page.rect.width / result.size[0]
+    if arabic:
+        fonts = pymupdf.Archive(str(arabic_font.parent))
+        size = sorted(line.box.height for line in arabic)[len(arabic) // 2] * scale * 0.62
+        css = _arabic_css(arabic_font, size, "text-align: right;")
+        for line in arabic:
+            b = line.box
+            bottom = b.y1 * scale + size * 0.35
+            rect = pymupdf.Rect(min(b.x0 * scale, b.x1 * scale - size), bottom - size * 1.4, b.x1 * scale, bottom)
+            page.insert_htmlbox(rect, f'<p dir="rtl">{html.escape(line.text)}</p>', css=css, archive=fonts,
+                                scale_low=0)
     if not lines:
         return page
-    scale = page.rect.width / result.size[0]
     archive = pymupdf.Archive(str(bundled_font().parent))
     # One size for the page, from a typical line; a line's box height varies with its marks.
     size = sorted(line.box.height for line in lines)[len(lines) // 2] * scale * 0.7

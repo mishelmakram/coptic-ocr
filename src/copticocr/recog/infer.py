@@ -21,19 +21,19 @@ class Recognizer:
     def __init__(self, checkpoint: str | Path, device: str | None = None):
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
         state = torch.load(checkpoint, map_location=self.device)
-        self.charset = Charset(state["symbols"])
+        self.charset = Charset(state["symbols"], state.get("script", "coptic"))
         self.model = CRNN(len(self.charset), state["hidden"]).to(self.device).eval()
         self.model.load_state_dict(state["model"])
 
     @torch.no_grad()
     def recognize(self, image: Image.Image) -> str:
-        logits = self.model(load_image(image).unsqueeze(0).to(self.device))
+        logits = self.model(load_image(image, self.charset.rtl).unsqueeze(0).to(self.device))
         return self.charset.decode(logits[0].argmax(-1).cpu())
 
     @torch.no_grad()
     def recognize_batch(self, images: list[Image.Image]) -> list[tuple[str, list[float]]]:
         """(text, per-letter confidence) for each line image."""
-        tensors = [load_image(img) for img in images]
+        tensors = [load_image(img, self.charset.rtl) for img in images]
         width = -(-max(t.shape[-1] for t in tensors) // PAD_TO) * PAD_TO
         batch = torch.zeros(len(tensors), 1, HEIGHT, width)
         for i, t in enumerate(tensors):

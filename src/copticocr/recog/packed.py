@@ -81,6 +81,8 @@ class PackedLineDataset(Dataset):
         j = self.indices[i]
         start, width = int(self.offsets[j]), int(self.widths[j])
         columns = np.array(self._lines[start:start + width], dtype=np.float32) / 255.0
+        if self.charset.rtl:
+            columns = columns[::-1]  # read a right-to-left line from its first letter
         image = torch.from_numpy(columns.T.copy()).unsqueeze(0)
         text = self.texts[j]
         return image, torch.tensor(self.charset.encode(text), dtype=torch.long), text
