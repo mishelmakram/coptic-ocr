@@ -8,13 +8,13 @@ from pathlib import Path
 
 from PySide6.QtCore import QSettings, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QFont, QIcon, QKeySequence, QPixmap
-from PySide6.QtWidgets import (QApplication, QFileDialog, QFrame, QLabel, QListWidget, QListWidgetItem,
-                               QMainWindow, QMessageBox, QProgressBar, QProgressDialog, QPushButton, QSizePolicy,
-                               QSplitter, QStackedWidget, QToolBar, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QListWidget,
+                               QListWidgetItem, QMainWindow, QMenu, QMessageBox, QProgressBar, QProgressDialog,
+                               QPushButton, QSplitter, QStackedWidget, QToolButton, QVBoxLayout, QWidget)
 
 from .. import book, enhance, export
 from ..pipeline import IMAGE_SUFFIXES, Document, PageResult
-from . import icons, theme as themes
+from . import chrome, icons, theme as themes
 from .export_dialog import ExportDialog
 from .i18n import language, tr
 from .pageview import PageView, to_pixmap
@@ -70,9 +70,7 @@ class MainWindow(QMainWindow):
         self.resize(1440, 900)
         self._build_actions()
         self._build_menus()
-        self._build_toolbar()
-        self._build_body()
-        self._build_status()
+        self._build_frame()
         self._apply_theme()
         self._update_state()
         geometry = self.settings.value("geometry")
@@ -118,18 +116,9 @@ class MainWindow(QMainWindow):
         self.addActions([self.prev_action, self.next_action])
 
     def _build_menus(self) -> None:
-        menu = self.menuBar().addMenu(tr("file"))
-        menu.addActions([self.open_action, self.export_action])
-        menu.addSeparator()
-        menu.addAction(tr("quit"), QKeySequence.Quit, self.close)
-        menu = self.menuBar().addMenu(tr("view"))
-        menu.addActions([self.converted_action, self.enhanced_action])
-        menu.addActions([self.zoom_in_action, self.zoom_out_action, self.fit_action])
-        menu.addSeparator()
+        """The "more" menu: settings and rarely used commands. Shortcuts live on the window itself."""
+        menu = QMenu(self)
         menu.addAction(self.dark_action)
-        menu = self.menuBar().addMenu(tr("tools"))
-        menu.addActions([self.read_action, self.read_all_action, self.stop_action])
-        menu.addSeparator()
         menu.addAction(self.keys_action)
         levels = menu.addMenu(tr("enhance_level"))
         group = QActionGroup(self)
@@ -139,6 +128,7 @@ class MainWindow(QMainWindow):
             action.setChecked(number == self.enhance_level)
             action.triggered.connect(lambda _=False, n=number: self._set_level(n))
             group.addAction(action)
+        menu.addSeparator()
         menu.addAction(tr("choose_model"), self.choose_model)
         self.cpu_action = menu.addAction(tr("use_cpu"))
         self.cpu_action.setCheckable(True)
@@ -146,38 +136,80 @@ class MainWindow(QMainWindow):
         self.cpu_action.toggled.connect(self._set_cpu)
         menu.addSeparator()
         menu.addAction(tr("language"), self.switch_language)
-        menu = self.menuBar().addMenu(tr("help"))
         menu.addAction(tr("about"), lambda: QMessageBox.about(self, tr("about"), tr("about_text")))
+        menu.addSeparator()
+        menu.addAction(tr("quit"), QKeySequence.Quit, self.close)
+        self.more_menu = menu
+        self.addActions([self.open_action, self.read_action, self.read_all_action, self.stop_action,
+                         self.export_action, self.zoom_in_action, self.zoom_out_action, self.fit_action,
+                         self.converted_action, self.enhanced_action, self.dark_action])
 
-    def _build_toolbar(self) -> None:
-        bar = QToolBar()
-        bar.setMovable(False)
-        bar.setFloatable(False)
-        bar.setIconSize(QSize(20, 20))
-        bar.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        bar.setContextMenuPolicy(Qt.PreventContextMenu)
-        self.addToolBar(bar)
-        bar.addAction(self.open_action)
-        bar.addSeparator()
-        bar.addAction(self.read_action)
-        bar.widgetForAction(self.read_action).setObjectName("primary")
-        bar.addAction(self.read_all_action)
-        bar.addAction(self.stop_action)
-        bar.addSeparator()
-        bar.addAction(self.export_action)
-        spacer = QWidget()
-        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        bar.addWidget(spacer)
-        bar.addAction(self.converted_action)
-        bar.addAction(self.enhanced_action)
-        bar.addSeparator()
-        for action in (self.zoom_out_action, self.zoom_in_action, self.fit_action, self.keys_action,
-                       self.dark_action):
-            bar.addAction(action)
-            bar.widgetForAction(action).setToolButtonStyle(Qt.ToolButtonIconOnly)
-        self.toolbar = bar
+    def _button(self, style: str, action: QAction) -> QPushButton:
+        """A push button that stands for ``action`` and follows its state."""
+        button = QPushButton(action.text())
+        button.setObjectName(style)
+        button.setCursor(Qt.PointingHandCursor)
+        button.setToolTip(action.toolTip())
+        button.clicked.connect(action.trigger)
+        button.action_icon = action.icon_name
+        action.changed.connect(lambda: (button.setEnabled(action.isEnabled()), button.setVisible(action.isVisible())))
+        return button
 
-    def _build_body(self) -> None:
+    def _build_header(self) -> QWidget:
+        header = QFrame()
+        header.setObjectName("header")
+        header.setFixedHeight(64)
+        row = QHBoxLayout(header)
+        row.setContentsMargins(18, 0, 14, 0)
+        row.setSpacing(8)
+        self.logo = QLabel()
+        row.addWidget(self.logo)
+        names = QVBoxLayout()
+        names.setSpacing(0)
+        names.setContentsMargins(4, 0, 0, 0)
+        brand = QLabel(tr("app_name"))
+        brand.setObjectName("brand")
+        self.doc_name = QLabel(tr("tagline"))
+        self.doc_name.setObjectName("docName")
+        names.addStretch()
+        names.addWidget(brand)
+        names.addWidget(self.doc_name)
+        names.addStretch()
+        row.addLayout(names)
+        row.addWidget(chrome.stretch())
+
+        self.view_switch = chrome.Segmented([tr("original"), tr("converted"), tr("enhanced")])
+        self.view_switch.chosen.connect(self._view_chosen)
+        self.view_switch.buttons[1].setToolTip(tr("converted_tip"))
+        self.view_switch.buttons[2].setToolTip(tr("enhanced_tip"))
+        row.addWidget(self.view_switch)
+        row.addWidget(chrome.stretch())
+
+        self.busy = QFrame()
+        self.busy.setObjectName("busy")
+        busy_row = QHBoxLayout(self.busy)
+        busy_row.setContentsMargins(12, 4, 4, 4)
+        busy_row.setSpacing(4)
+        self.busy_text = QLabel()
+        self.busy_text.setObjectName("busyText")
+        self.stop_button = chrome.tool_button("stopButton", tr("stop"))
+        self.stop_button.clicked.connect(self.stop_action.trigger)
+        busy_row.addWidget(self.busy_text)
+        busy_row.addWidget(self.stop_button)
+        self.busy.hide()
+        row.addWidget(self.busy)
+
+        self.header_buttons = [self._button("ghost", self.open_action), self._button("ghost", self.read_all_action),
+                               self._button("secondary", self.export_action), self._button("primary", self.read_action)]
+        for button in self.header_buttons:
+            row.addWidget(button)
+        self.more_button = chrome.tool_button("iconButton", tr("more"))
+        self.more_button.setMenu(self.more_menu)
+        self.more_button.setPopupMode(QToolButton.InstantPopup)
+        row.addWidget(self.more_button)
+        return header
+
+    def _build_body(self) -> QWidget:
         self.pages = QListWidget()
         self.pages.setObjectName("pages")
         self.pages.setViewMode(QListWidget.IconMode)
@@ -187,17 +219,37 @@ class MainWindow(QMainWindow):
         self.pages.setIconSize(THUMB)
         self.pages.setUniformItemSizes(True)
         self.pages.setGridSize(QSize(THUMB.width() + 28, THUMB.height() + 40))
-        self.pages.setMinimumWidth(THUMB.width() + 44)
-        self.pages.setMaximumWidth(THUMB.width() + 60)
         self.pages.currentRowChanged.connect(self.go)
         self.pages.verticalScrollBar().valueChanged.connect(lambda _: self._thumb_timer.start(0))
         self._thumb_timer = QTimer(self, singleShot=True, interval=0, timeout=self._load_thumbnails)
+        self.pages_panel = QFrame()
+        self.pages_panel.setObjectName("sidePanel")
+        self.pages_panel.setFixedWidth(THUMB.width() + 72)
+        column = QVBoxLayout(self.pages_panel)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(0)
+        self.pages_header = chrome.PanelHeader(tr("pages"))
+        column.addWidget(self.pages_header)
+        column.addWidget(self.pages)
 
         self.view = PageView(self.theme)
         self.view.line_clicked.connect(self._line_clicked_on_page)
         self.stack = QStackedWidget()
+        self.stack.setObjectName("stack")
         self.stack.addWidget(self._welcome())
         self.stack.addWidget(self.view)
+        self.floating = chrome.FloatingBar()
+        self.floating.previous.clicked.connect(lambda: self.go(self.current - 1))
+        self.floating.next.clicked.connect(lambda: self.go(self.current + 1))
+        self.floating.zoom_in.clicked.connect(self.zoom_in_action.trigger)
+        self.floating.zoom_out.clicked.connect(self.zoom_out_action.trigger)
+        self.floating.fit.clicked.connect(self.fit_action.trigger)
+        for button, key in ((self.floating.previous, "previous_page"), (self.floating.next, "next_page"),
+                            (self.floating.zoom_in, "zoom_in"), (self.floating.zoom_out, "zoom_out"),
+                            (self.floating.fit, "fit_width")):
+            button.setToolTip(tr(key))
+        self.floating.hide()
+        canvas = chrome.Canvas(self.stack, self.floating)
 
         self.panel = ProofreadPanel(self.theme, self.coptic_font)
         self.panel.set_legacy_keys(self.keys_action.isChecked())
@@ -207,29 +259,68 @@ class MainWindow(QMainWindow):
         self._refresh_timer = QTimer(self, singleShot=True, interval=500, timeout=self._show_current)
 
         splitter = QSplitter()
-        splitter.addWidget(self.pages)
-        splitter.addWidget(self.stack)
+        splitter.addWidget(self.pages_panel)
+        splitter.addWidget(canvas)
         splitter.addWidget(self.panel)
         splitter.setStretchFactor(1, 3)
         splitter.setStretchFactor(2, 2)
-        splitter.setSizes([150, 760, 520])
+        splitter.setSizes([170, 760, 500])
         splitter.setCollapsible(1, False)
-        self.setCentralWidget(splitter)
-        self.pages.hide()  # shown once a book is open
+        self.pages_panel.hide()  # shown once a book is open
         self.panel.hide()
+        return splitter
+
+    def _build_footer(self) -> QWidget:
+        footer = QFrame()
+        footer.setObjectName("footer")
+        footer.setFixedHeight(32)
+        row = QHBoxLayout(footer)
+        row.setContentsMargins(16, 0, 16, 0)
+        row.setSpacing(6)
+        self.footer_text = QLabel()
+        self.footer_text.setObjectName("footerText")
+        row.addWidget(self.footer_text, 1)
+        self.page_chip, self.read_chip, self.model_chip = QLabel(), QLabel(), QLabel()
+        for chip in (self.page_chip, self.read_chip, self.model_chip):
+            chip.setObjectName("chip")
+            row.addWidget(chip)
+        self._footer_timer = QTimer(self, singleShot=True, timeout=lambda: self.footer_text.setText(""))
+        return footer
+
+    def notify(self, text: str, ms: int = 8000) -> None:
+        """A message in the footer that clears itself."""
+        self.footer_text.setText(text)
+        self._footer_timer.start(ms)
+
+    def _build_frame(self) -> None:
+        root = QWidget()
+        column = QVBoxLayout(root)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(0)
+        column.addWidget(self._build_header())
+        self.line = QProgressBar()
+        self.line.setObjectName("line")
+        self.line.setTextVisible(False)
+        self.line.setFixedHeight(3)
+        self.line.hide()
+        column.addWidget(self.line)
+        column.addWidget(self._build_body(), 1)
+        column.addWidget(self._build_footer())
+        self.setCentralWidget(root)
 
     def _welcome(self) -> QWidget:
         page = QWidget()
         outer = QVBoxLayout(page)
-        outer.setContentsMargins(48, 48, 48, 48)
+        outer.setContentsMargins(56, 48, 56, 48)
         zone = QFrame()
         zone.setObjectName("dropZone")
         inner = QVBoxLayout(zone)
         inner.setAlignment(Qt.AlignCenter)
-        inner.setSpacing(14)
+        inner.setSpacing(12)
         self.welcome_icon = QLabel()
         self.welcome_icon.setAlignment(Qt.AlignCenter)
         inner.addWidget(self.welcome_icon)
+        inner.addSpacing(6)
         title = QLabel(tr("welcome_title"))
         title.setObjectName("welcomeTitle")
         title.setAlignment(Qt.AlignCenter)
@@ -238,43 +329,46 @@ class MainWindow(QMainWindow):
         body.setObjectName("welcomeBody")
         body.setAlignment(Qt.AlignCenter)
         inner.addWidget(body)
+        inner.addSpacing(10)
         button = QPushButton(tr("open"))
-        button.setObjectName("primary")
+        button.setObjectName("hero")
+        button.setMinimumWidth(180)
         button.setCursor(Qt.PointingHandCursor)
         button.clicked.connect(self.open_dialog)
+        self.welcome_button = button
         inner.addWidget(button, alignment=Qt.AlignCenter)
+        hint = QLabel(tr("welcome_hint"))
+        hint.setObjectName("shortcutHint")
+        hint.setAlignment(Qt.AlignCenter)
+        inner.addWidget(hint)
         outer.addWidget(zone)
         return page
-
-    def _build_status(self) -> None:
-        status = self.statusBar()
-        status.setSizeGripEnabled(False)
-        status.setContentsMargins(10, 0, 10, 0)
-        self.page_label = QLabel()
-        self.model_label = QLabel()
-        self.progress = QProgressBar()
-        self.progress.setFixedWidth(220)
-        self.progress.setTextVisible(False)
-        self.progress.hide()
-        self.progress_label = QLabel()
-        status.addWidget(self.page_label)
-        status.addWidget(self.progress_label)
-        status.addWidget(self.progress)
-        status.addPermanentWidget(self.model_label)
 
     # Theme --------------------------------------------------------------
     def _apply_theme(self) -> None:
         themes.apply(QApplication.instance(), self.theme)
+        t = self.theme
         for action in self.findChildren(QAction):
             name = getattr(action, "icon_name", None)
             if name:
-                action.setIcon(icons.icon(name, self.theme.text))
-        primary = self.toolbar.widgetForAction(self.read_action)
-        primary.setIcon(icons.icon("read", self.theme.on_accent))
-        self.setWindowIcon(icons.app_icon(self.theme.accent, self.coptic_family))
-        self.welcome_icon.setPixmap(icons.app_icon(self.theme.accent, self.coptic_family).pixmap(88, 88))
-        self.view.set_theme(self.theme)
-        self.panel.set_theme(self.theme)
+                action.setIcon(icons.icon(name, t.text))
+        for button in self.header_buttons:
+            color = t.on_accent if button.objectName() == "primary" else t.text
+            button.setIcon(icons.icon(button.action_icon, color, 18))
+        self.more_button.setIcon(icons.icon("more", t.text))
+        self.stop_button.setIcon(icons.icon("close", t.accent, 16))
+        for button, name in ((self.floating.previous, "next" if self.layoutDirection() == Qt.RightToLeft else "prev"),
+                             (self.floating.next, "prev" if self.layoutDirection() == Qt.RightToLeft else "next"),
+                             (self.floating.zoom_in, "zoom_in"), (self.floating.zoom_out, "zoom_out"),
+                             (self.floating.fit, "fit")):
+            button.setIcon(icons.icon(name, t.text, 18))
+        for button, name in zip(self.view_switch.buttons, ("page", "type", "wand")):
+            button.setIcon(icons.icon(name, t.muted, 16))
+        self.setWindowIcon(icons.app_icon(t.accent, self.coptic_family))
+        self.logo.setPixmap(icons.app_icon(t.accent, self.coptic_family).pixmap(34, 34))
+        self.welcome_icon.setPixmap(icons.app_icon(t.accent, self.coptic_family).pixmap(96, 96))
+        self.view.set_theme(t)
+        self.panel.set_theme(t)
 
     def toggle_dark(self, on: bool) -> None:
         self.theme = themes.DARK if on else themes.LIGHT
@@ -318,8 +412,13 @@ class MainWindow(QMainWindow):
             item.setTextAlignment(Qt.AlignHCenter)
             self.pages.addItem(item)
         self.stack.setCurrentWidget(self.view)
-        self.pages.show()
+        self.pages_panel.show()
+        self.pages_header.set_count(len(self.doc))
         self.panel.show()
+        self.floating.show()
+        name = self.doc.name + (f"  +{len(self.doc.paths) - 1}" if len(self.doc.paths) > 1 else "")
+        self.doc_name.setText(self.doc_name.fontMetrics().elidedText(name, Qt.ElideMiddle, 300))
+        self.doc_name.setToolTip(str(self.doc.paths[0]))
         self.current = -1
         self.pages.setCurrentRow(0)
         self._thumb_timer.start(0)
@@ -392,6 +491,14 @@ class MainWindow(QMainWindow):
         for action in (self.converted_action, self.enhanced_action):
             if action is not chosen:
                 action.setChecked(False)
+        self.view_switch.set_current(1 if self.converted_action.isChecked() else
+                                     2 if self.enhanced_action.isChecked() else 0)
+        self._show_current()
+
+    def _view_chosen(self, index: int) -> None:
+        """The header's view switch: the scan, the page with its text set in type, or the cleaned page."""
+        self.converted_action.setChecked(index == 1)
+        self.enhanced_action.setChecked(index == 2)
         self._show_current()
 
     def _line_clicked_on_page(self, index: int) -> None:
@@ -411,19 +518,19 @@ class MainWindow(QMainWindow):
         self.reader.failed_to_start.connect(self._reader_failed)
         self.reader.page_read.connect(self._page_read)
         self.reader.page_failed.connect(
-            lambda i, e: self.statusBar().showMessage(tr("read_failed", i + 1, e), 8000))
-        self.model_label.setText(tr("loading_model"))
+            lambda i, e: self.notify(tr("read_failed", i + 1, e), 8000))
+        self.model_chip.setText(tr("loading_model"))
         self.reader.start()
         return True
 
     def _reader_ready(self, device: str) -> None:
         self.device = "GPU" if device.startswith("cuda") else "CPU"
-        self.model_label.setText(tr("model_info", self.checkpoint.parent.name, self.device))
+        self.model_chip.setText(tr("model_info", self.checkpoint.parent.name, self.device))
 
     def _reader_failed(self, error: str) -> None:
         self.reader = None
         self.pending.clear()
-        self.model_label.setText("")
+        self.model_chip.setText("")
         QMessageBox.critical(self, tr("app_name"), tr("model_failed", error))
         self._update_state()
 
@@ -466,10 +573,11 @@ class MainWindow(QMainWindow):
         if index == self.current:
             self.converted_action.setChecked(True)  # show what the reading produced
             self.enhanced_action.setChecked(False)
+            self.view_switch.set_current(1)
             self._show_current()
             self.panel.set_page(self.page_image, result)
             coptic = sum(line.script == "coptic" and bool(line.text) for line in result.lines)
-            self.statusBar().showMessage(tr("page_done", index + 1, coptic), 15000)
+            self.notify(tr("page_done", index + 1, coptic), 15000)
         self._update_state()
 
     def _stop_reader(self) -> None:
@@ -532,7 +640,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, tr("app_name"), tr("save_failed", error))
             return
         QApplication.restoreOverrideCursor()
-        self.statusBar().showMessage(tr("saved", path), 8000)
+        self.notify(tr("saved", path), 8000)
 
     def _enhance_to(self, path: Path, pages: list[int]) -> None:
         """Write the enhanced PDF on a background thread, with progress and a way to cancel."""
@@ -560,7 +668,7 @@ class MainWindow(QMainWindow):
             if error:
                 QMessageBox.critical(self, tr("app_name"), tr("save_failed", error))
             elif completed:
-                self.statusBar().showMessage(tr("saved", path), 8000)
+                self.notify(tr("saved", path), 8000)
 
         job.progressed.connect(advanced)
         job.done.connect(finished)
@@ -574,30 +682,38 @@ class MainWindow(QMainWindow):
         busy = bool(self.pending)
         self.read_action.setEnabled(has_doc and self.current not in self.pending)
         self.read_all_action.setEnabled(has_doc and any(r is None for r in self.results))
-        self.stop_action.setVisible(busy)
+        self.stop_action.setEnabled(busy)
         self.export_action.setEnabled(has_doc)  # enhancing pages needs no reading
         for action in (self.zoom_in_action, self.zoom_out_action, self.fit_action):
             action.setEnabled(has_doc)
-        self.converted_action.setEnabled(has_doc and self.current >= 0 and self.results[self.current] is not None)
+        page_read = has_doc and self.current >= 0 and self.results[self.current] is not None
+        self.converted_action.setEnabled(page_read)
         self.enhanced_action.setEnabled(has_doc)
+        self.view_switch.setVisible(has_doc)
+        self.view_switch.buttons[1].setEnabled(page_read)
+        if not page_read and self.view_switch.current() == 1:
+            self.view_switch.set_current(0)
         if has_doc:
             read = sum(r is not None for r in self.results)
-            self.page_label.setText(f"{tr('page_of', self.current + 1, len(self.doc))}  ·  "
-                                    f"{tr('pages_read', read)}")
-        else:
-            self.page_label.setText("")
+            self.floating.page.setText(f"{self.current + 1} / {len(self.doc)}")
+            self.floating.previous.setEnabled(self.current > 0)
+            self.floating.next.setEnabled(self.current < len(self.doc) - 1)
+            self.page_chip.setText(tr("page_of", self.current + 1, len(self.doc)))
+            self.read_chip.setText(tr("pages_read", read))
+        self.page_chip.setVisible(has_doc)
+        self.read_chip.setVisible(has_doc)
         if busy:
             done = self.batch_total - len(self.pending)
-            self.progress.setMaximum(self.batch_total)
-            self.progress.setValue(done)
-            self.progress_label.setText(tr("reading", done + 1, self.batch_total))
-        self.progress.setVisible(busy)
-        self.progress_label.setVisible(busy)
-        if self.reader is None and self.checkpoint is not None:
-            self.model_label.setText(tr("model_info", self.checkpoint.parent.name,
-                                        "CPU" if self.cpu_action.isChecked() else "auto"))
-        elif self.checkpoint is None:
-            self.model_label.setText(tr("no_model"))
+            self.line.setMaximum(self.batch_total)
+            self.line.setValue(done)
+            self.busy_text.setText(tr("reading", done + 1, self.batch_total))
+        self.busy.setVisible(busy)
+        self.line.setVisible(busy)
+        if self.checkpoint is None:
+            self.model_chip.setText(tr("no_model"))
+        elif self.reader is None:
+            self.model_chip.setText(tr("model_info", self.checkpoint.parent.name,
+                                       "CPU" if self.cpu_action.isChecked() else "auto"))
 
     def closeEvent(self, event) -> None:
         if self.pending and QMessageBox.question(self, tr("app_name"), tr("unsaved_quit")) != QMessageBox.Yes:

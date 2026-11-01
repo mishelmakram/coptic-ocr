@@ -4,40 +4,49 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PySide6.QtGui import QColor, QFont, QPalette
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QPalette
 from PySide6.QtWidgets import QApplication
 
 
 @dataclass(frozen=True)
 class Theme:
     dark: bool
-    bg: str          # window background
-    surface: str     # panels and cards
-    sunken: str      # page canvas, inputs
+    bg: str          # behind the panels
+    surface: str     # panels, header, cards
+    sunken: str      # inputs, segmented control, the page's surroundings
     border: str
     text: str
     muted: str
-    accent: str      # Coptic burgundy
+    accent: str      # Coptic burgundy, kept for what matters
     accent_hover: str
     accent_soft: str
     on_accent: str
     good: str
     warn: str
     bad: str
+    canvas: str      # around the page
 
 
-LIGHT = Theme(False, bg="#F4F2EE", surface="#FFFFFF", sunken="#E9E6E0", border="#DDD8CF",
-              text="#1F1C19", muted="#6E675E", accent="#8A1C30", accent_hover="#A4263D",
-              accent_soft="#F4E4E6", on_accent="#FFFFFF", good="#2F7D50", warn="#B7791F", bad="#C0392B")
-DARK = Theme(True, bg="#161518", surface="#1F1E22", sunken="#121114", border="#322F36",
-             text="#ECE9E4", muted="#A39D95", accent="#D45C70", accent_hover="#E27286",
-             accent_soft="#3A2329", on_accent="#1A0E11", good="#5BBE84", warn="#E0A64A", bad="#EE6B5B")
+LIGHT = Theme(False, bg="#F4F3F1", surface="#FFFFFF", sunken="#EFEDEA", border="#E5E1DB",
+              text="#1C1A17", muted="#7A746C", accent="#8C1D33", accent_hover="#A2263F",
+              accent_soft="#F7E8EB", on_accent="#FFFFFF", good="#2E7D52", warn="#B7791F", bad="#C0392B",
+              canvas="#E8E6E2")
+DARK = Theme(True, bg="#111113", surface="#1A1A1D", sunken="#242428", border="#2C2C31",
+             text="#EEECE9", muted="#9C978F", accent="#E0627B", accent_hover="#EC7B92",
+             accent_soft="#3B1F27", on_accent="#1A0B10", good="#5CC08A", warn="#E3A84E", bad="#F06B5B",
+             canvas="#0C0C0E")
 
 
 def confidence_color(theme: Theme, confidence: float) -> str:
     if confidence >= 0.9:
         return theme.good
     return theme.warn if confidence >= 0.6 else theme.bad
+
+
+def ui_family() -> str:
+    """Windows 11's variable UI face where present, else Segoe UI."""
+    families = set(QFontDatabase.families())
+    return next((f for f in ("Segoe UI Variable Text", "Segoe UI") if f in families), "Segoe UI")
 
 
 def apply(app: QApplication, theme: Theme) -> None:
@@ -52,7 +61,7 @@ def apply(app: QApplication, theme: Theme) -> None:
         palette.setColor(role, QColor(value))
     app.setPalette(palette)
     # The UI font is set here, not in the style sheet, which would override the Coptic font of editors.
-    app.setFont(QFont("Segoe UI", 10))
+    app.setFont(QFont(ui_family(), 10))
     app.setStyleSheet(style_sheet(theme))
 
 
@@ -60,80 +69,117 @@ def style_sheet(t: Theme) -> str:
     return f"""
     QMainWindow, QDialog {{ background: {t.bg}; }}
     QWidget {{ color: {t.text}; }}
-    QToolTip {{ background: {t.surface}; color: {t.text}; border: 1px solid {t.border}; padding: 6px; }}
+    QToolTip {{ background: {t.surface}; color: {t.text}; border: 1px solid {t.border}; border-radius: 6px;
+                padding: 6px 8px; }}
 
-    QMenuBar {{ background: {t.surface}; border-bottom: 1px solid {t.border}; padding: 2px 6px; }}
-    QMenuBar::item {{ padding: 5px 10px; border-radius: 6px; background: transparent; }}
-    QMenuBar::item:selected {{ background: {t.sunken}; }}
-    QMenu {{ background: {t.surface}; border: 1px solid {t.border}; border-radius: 8px; padding: 6px; }}
-    QMenu::item {{ padding: 7px 26px; border-radius: 6px; }}
-    QMenu::item:selected {{ background: {t.accent_soft}; color: {t.text}; }}
-    QMenu::separator {{ height: 1px; background: {t.border}; margin: 5px 8px; }}
+    /* Header */
+    QFrame#header {{ background: {t.surface}; border: none; border-bottom: 1px solid {t.border}; }}
+    QLabel#brand {{ font-size: 12pt; font-weight: 700; }}
+    QLabel#docName {{ color: {t.muted}; font-size: 10pt; }}
+    QProgressBar#line {{ background: transparent; border: none; max-height: 3px; min-height: 3px; }}
+    QProgressBar#line::chunk {{ background: {t.accent}; }}
+    QFrame#busy {{ background: {t.accent_soft}; border-radius: 15px; }}
+    QLabel#busyText {{ color: {t.accent}; font-weight: 600; padding: 0 2px; }}
 
-    QToolBar {{ background: {t.surface}; border: none; border-bottom: 1px solid {t.border};
-                padding: 8px 12px; spacing: 6px; }}
-    QToolBar::separator {{ width: 1px; background: {t.border}; margin: 6px 8px; }}
-    QToolButton {{ background: transparent; border: 1px solid transparent; border-radius: 8px;
-                   padding: 6px 12px; }}
-    QToolButton:hover {{ background: {t.sunken}; }}
-    QToolButton:pressed, QToolButton:checked {{ background: {t.accent_soft}; border-color: {t.accent_soft}; }}
-    QToolButton:disabled {{ color: {t.muted}; }}
-    QToolButton#primary {{ background: {t.accent}; color: {t.on_accent}; font-weight: 600; }}
-    QToolButton#primary:hover {{ background: {t.accent_hover}; }}
-    QToolButton#primary:disabled {{ background: {t.sunken}; color: {t.muted}; }}
-
-    QPushButton {{ background: {t.surface}; border: 1px solid {t.border}; border-radius: 8px;
-                   padding: 7px 18px; }}
-    QPushButton:hover {{ border-color: {t.muted}; }}
-    QPushButton#primary {{ background: {t.accent}; border-color: {t.accent}; color: {t.on_accent};
-                           font-weight: 600; }}
+    QPushButton {{ border-radius: 9px; padding: 7px 14px; font-weight: 600; }}
+    QPushButton#primary {{ background: {t.accent}; color: {t.on_accent}; border: 1px solid {t.accent}; }}
     QPushButton#primary:hover {{ background: {t.accent_hover}; border-color: {t.accent_hover}; }}
+    QPushButton#primary:disabled {{ background: {t.sunken}; color: {t.muted}; border-color: {t.sunken}; }}
+    QPushButton#secondary {{ background: {t.surface}; border: 1px solid {t.border}; }}
+    QPushButton#secondary:hover {{ background: {t.sunken}; }}
+    QPushButton#secondary:disabled {{ color: {t.muted}; }}
+    QPushButton#hero {{ background: {t.accent}; color: {t.on_accent}; border: none; border-radius: 12px;
+                        padding: 11px 26px; font-size: 11pt; }}
+    QPushButton#hero:hover {{ background: {t.accent_hover}; }}
+    QPushButton#ghost {{ background: transparent; border: 1px solid transparent; }}
+    QPushButton#ghost:hover {{ background: {t.sunken}; }}
+    QPushButton#ghost:disabled {{ color: {t.muted}; }}
+    QPushButton {{ background: {t.surface}; border: 1px solid {t.border}; }}
 
-    QSplitter::handle {{ background: {t.border}; }}
+    QToolButton#iconButton {{ border: none; border-radius: 9px; padding: 7px; }}
+    QToolButton#iconButton:hover {{ background: {t.sunken}; }}
+    QToolButton#iconButton::menu-indicator {{ image: none; width: 0; }}
+    QToolButton#stopButton {{ border: none; border-radius: 11px; padding: 3px; }}
+    QToolButton#stopButton:hover {{ background: {t.surface}; }}
+
+    QFrame#segmented {{ background: {t.sunken}; border-radius: 11px; }}
+    QToolButton#segment {{ border: none; border-radius: 8px; padding: 6px 14px; color: {t.muted};
+                           font-weight: 600; }}
+    QToolButton#segment:hover {{ color: {t.text}; }}
+    QToolButton#segment:checked {{ background: {t.surface}; color: {t.text}; border: 1px solid {t.border}; }}
+    QToolButton#segment:disabled {{ color: {t.border}; }}
+
+    QMenu {{ background: {t.surface}; border: 1px solid {t.border}; border-radius: 10px; padding: 6px; }}
+    QMenu::item {{ padding: 8px 28px 8px 14px; border-radius: 7px; }}
+    QMenu::item:selected {{ background: {t.sunken}; color: {t.text}; }}
+    QMenu::item:disabled {{ color: {t.muted}; }}
+    QMenu::separator {{ height: 1px; background: {t.border}; margin: 6px 8px; }}
+    QMenu::indicator {{ width: 14px; height: 14px; }}
+
+    /* Body */
+    QSplitter::handle {{ background: {t.bg}; }}
     QSplitter::handle:horizontal {{ width: 1px; }}
-
-    QListWidget#pages {{ background: {t.surface}; border: none; padding: 8px 4px; outline: none; }}
-    QListWidget#pages::item {{ border: 2px solid transparent; border-radius: 8px; padding: 6px;
-                               margin: 2px; color: {t.muted}; }}
+    QFrame#sidePanel {{ background: {t.surface}; border: none; }}
+    QWidget#panelHeader {{ background: transparent; }}
+    QLabel#panelTitle {{ font-size: 11pt; font-weight: 700; }}
+    QLabel#countChip {{ background: {t.sunken}; color: {t.muted}; border-radius: 9px; padding: 1px 8px;
+                        font-size: 9pt; font-weight: 600; }}
+    QListWidget#pages {{ background: transparent; border: none; padding: 0 8px 8px 8px; outline: none; }}
+    QListWidget#pages::item {{ border: 2px solid transparent; border-radius: 10px; padding: 6px; margin: 2px;
+                               color: {t.muted}; }}
     QListWidget#pages::item:hover {{ background: {t.sunken}; }}
-    QListWidget#pages::item:selected {{ border-color: {t.accent}; background: {t.accent_soft};
-                                        color: {t.text}; }}
+    QListWidget#pages::item:selected {{ border-color: {t.accent}; background: {t.accent_soft}; color: {t.text}; }}
 
-    QGraphicsView#canvas {{ background: {t.sunken}; border: none; }}
-    QWidget#panel {{ background: {t.surface}; }}
-    QLabel#panelTitle {{ font-size: 11pt; font-weight: 600; }}
-    QLabel#muted {{ color: {t.muted}; }}
-    QLabel#welcomeTitle {{ font-size: 18pt; font-weight: 600; }}
+    QWidget#canvasArea, QStackedWidget#stack {{ background: {t.canvas}; }}
+    QGraphicsView#canvas {{ background: {t.canvas}; border: none; }}
+    QFrame#pill {{ background: {t.surface}; border: 1px solid {t.border}; border-radius: 20px; }}
+    QToolButton#pillButton {{ border: none; border-radius: 15px; padding: 6px; }}
+    QToolButton#pillButton:hover {{ background: {t.sunken}; }}
+    QToolButton#pillButton:disabled {{ background: transparent; }}
+    QLabel#pillLabel {{ font-weight: 600; color: {t.text}; padding: 0 4px; }}
+    QFrame#pillDivider {{ background: {t.border}; }}
+
+    QLabel#welcomeTitle {{ font-size: 20pt; font-weight: 700; }}
     QLabel#welcomeBody {{ color: {t.muted}; font-size: 11pt; }}
-    QFrame#dropZone {{ border: 2px dashed {t.border}; border-radius: 16px; background: {t.surface}; }}
+    QFrame#dropZone {{ border: 2px dashed {t.border}; border-radius: 22px; background: {t.surface}; }}
+    QLabel#shortcutHint {{ color: {t.muted}; font-size: 9pt; }}
 
     QScrollArea {{ border: none; background: transparent; }}
     QScrollArea > QWidget > QWidget {{ background: transparent; }}
-    QFrame#lineCard {{ background: {t.surface}; border: 1px solid {t.border}; border-radius: 10px; }}
+    QWidget#panel {{ background: {t.surface}; }}
+    QLabel#muted {{ color: {t.muted}; }}
+    QFrame#lineCard {{ background: {t.surface}; border: 1px solid {t.border}; border-radius: 12px; }}
+    QFrame#lineCard:hover {{ border-color: {t.muted}; }}
     QFrame#lineCard[selected="true"] {{ border: 2px solid {t.accent}; background: {t.accent_soft}; }}
-    QLabel#lineNumber {{ color: {t.muted}; font-size: 9pt; }}
-    QLabel#badge {{ border-radius: 8px; padding: 1px 8px; font-size: 8pt; font-weight: 600; }}
-    QLabel#lineImage {{ background: #FFFFFF; border-radius: 6px; }}
-    QLineEdit {{ background: {t.sunken}; border: 1px solid {t.border}; border-radius: 6px;
-                 padding: 5px 8px; selection-background-color: {t.accent}; }}
-    QLineEdit:focus {{ border-color: {t.accent}; }}
+    QLabel#lineNumber {{ color: {t.muted}; font-size: 9pt; font-weight: 600; }}
+    QLabel#badge {{ border-radius: 9px; padding: 1px 9px; font-size: 8pt; font-weight: 700; }}
+    QLabel#lineImage {{ background: #FFFFFF; border-radius: 8px; padding: 2px; }}
+    QLineEdit {{ background: {t.sunken}; border: 1px solid transparent; border-radius: 8px; padding: 6px 10px; }}
+    QLineEdit:focus {{ border-color: {t.accent}; background: {t.surface}; }}
 
-    QTabBar::tab {{ background: transparent; padding: 6px 14px; border-radius: 6px; color: {t.muted}; }}
-    QTabBar::tab:selected {{ background: {t.accent_soft}; color: {t.text}; font-weight: 600; }}
-    QTabBar::tab:hover:!selected {{ background: {t.sunken}; }}
+    QTabBar::tab {{ background: transparent; padding: 5px 12px; border-radius: 8px; color: {t.muted};
+                    font-weight: 600; }}
+    QTabBar::tab:selected {{ background: {t.sunken}; color: {t.text}; }}
+    QTabBar::tab:hover:!selected {{ color: {t.text}; }}
 
-    QStatusBar {{ background: {t.surface}; border-top: 1px solid {t.border}; color: {t.muted}; }}
-    QStatusBar QLabel {{ color: {t.muted}; padding: 0 8px; }}
-    QProgressBar {{ background: {t.sunken}; border: none; border-radius: 4px; height: 8px;
-                    max-height: 8px; text-align: center; }}
-    QProgressBar::chunk {{ background: {t.accent}; border-radius: 4px; }}
+    /* Footer */
+    QFrame#footer {{ background: {t.surface}; border-top: 1px solid {t.border}; }}
+    QLabel#footerText {{ color: {t.muted}; font-size: 9pt; }}
+    QLabel#chip {{ background: {t.sunken}; color: {t.muted}; border-radius: 9px; padding: 2px 9px;
+                   font-size: 9pt; }}
 
-    QComboBox {{ background: {t.surface}; border: 1px solid {t.border}; border-radius: 8px; padding: 6px 10px; }}
+    /* Dialogs and controls */
+    QComboBox {{ background: {t.surface}; border: 1px solid {t.border}; border-radius: 9px; padding: 6px 10px; }}
     QComboBox QAbstractItemView {{ background: {t.surface}; border: 1px solid {t.border};
-                                   selection-background-color: {t.accent_soft}; selection-color: {t.text}; }}
-    QRadioButton {{ spacing: 8px; padding: 4px 0; }}
-    QGroupBox {{ border: 1px solid {t.border}; border-radius: 10px; margin-top: 14px; padding: 12px; }}
-    QGroupBox::title {{ subcontrol-origin: margin; left: 12px; right: 12px; padding: 0 4px; color: {t.muted}; }}
+                                   selection-background-color: {t.sunken}; selection-color: {t.text}; }}
+    QRadioButton, QCheckBox {{ spacing: 8px; padding: 4px 0; }}
+    QGroupBox {{ border: 1px solid {t.border}; border-radius: 12px; margin-top: 16px; padding: 14px 12px 10px 12px;
+                 background: {t.surface}; }}
+    QGroupBox::title {{ subcontrol-origin: margin; left: 14px; right: 14px; padding: 0 6px; color: {t.muted};
+                        font-weight: 600; }}
+    QProgressDialog QProgressBar, QProgressBar {{ background: {t.sunken}; border: none; border-radius: 4px;
+                                                  height: 8px; text-align: center; }}
+    QProgressBar::chunk {{ background: {t.accent}; border-radius: 4px; }}
 
     QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
     QScrollBar::handle:vertical {{ background: {t.border}; border-radius: 4px; min-height: 30px; }}
