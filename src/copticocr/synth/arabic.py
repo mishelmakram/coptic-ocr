@@ -70,6 +70,19 @@ def sample_line(corpus: list[str], rng: random.Random) -> tuple[str, str]:
     words = vowels(" ".join(words[start:start + rng.randint(1, 7)]), rng).split()
     shown = [stretch(w, rng) if rng.random() < 0.12 else w for w in words]
     label_words = list(words)
+    roll = rng.random()
+    if roll < 0.06:  # a date or a count standing alone, as in feast titles: ٣٠ أمشير - ٩ مارس
+        at = rng.randint(0, len(shown))
+        number = "".join(rng.choice(DIGITS) for _ in range(rng.randint(1, 3)))
+        shown.insert(at, number)
+        label_words.insert(at, number)
+    elif roll < 0.09:
+        at = rng.randint(1, max(1, len(shown)))
+        shown.insert(at, "-")
+        label_words.insert(at, "-")
+    if rng.random() < 0.05:  # a title in brackets
+        shown = ["(", *shown, ")"]
+        label_words = ["(", *label_words, ")"]
     if rng.random() < 0.12:  # a verse number before the first word
         number = "".join(rng.choice(DIGITS) for _ in range(rng.randint(1, 2)))
         shown[0] = f"\x00{number}\x01{shown[0]}"

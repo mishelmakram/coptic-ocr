@@ -22,7 +22,6 @@ from .structure import Row, line_rows, stanza_rows
 
 FONT_SIZE = 14  # points, for the Coptic text
 ARABIC_FONT = "Simplified Arabic"  # on every Windows; Arabic type runs smaller than Coptic at one size
-ARABIC_SCALE = 1.2
 
 LINE_SPACING = 1.35
 
@@ -122,7 +121,7 @@ def to_docx_book(doc: Document, results: list[PageResult | None], path: Path,
                 paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 paragraph.paragraph_format.space_after = Pt(6)
                 if row.title_text:
-                    _arabic_run(paragraph, row.title_text, FONT_SIZE * ARABIC_SCALE * 1.15, bold=True)
+                    _arabic_run(paragraph, row.title_text, FONT_SIZE * 1.15, bold=True)
                 else:
                     _add_picture(paragraph, crop(image, _title_box(row)), scale, usable)
                 continue
@@ -136,7 +135,7 @@ def to_docx_book(doc: Document, results: list[PageResult | None], path: Path,
                 paragraph.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
                 paragraph.paragraph_format.right_to_left = True
                 paragraph.paragraph_format.space_after = Pt(8)
-                _arabic_run(paragraph, row.arabic_text, FONT_SIZE * ARABIC_SCALE)
+                _arabic_run(paragraph, row.arabic_text, FONT_SIZE)  # Word lays it out; a reading size
                 continue
             for k, line in enumerate(row.arabic):
                 paragraph = cells[1].paragraphs[0] if k == 0 else cells[1].add_paragraph()
@@ -229,6 +228,12 @@ def to_pdf_book(doc: Document, results: list[PageResult | None], path: Path, sta
     out = pymupdf.open()
     scratch = pymupdf.open()
     ruler = scratch.new_page(width=1000, height=10000)
+
+    def measure(html_text: str, w: float, style: str, fonts: pymupdf.Archive) -> float:
+        """Height the HTML takes when laid out ``w`` points wide."""
+        ruler.clean_contents()
+        spare, _ = ruler.insert_htmlbox(pymupdf.Rect(0, 0, w, 10000), html_text, css=style, archive=fonts)
+        return 10000 - spare
     try:
         for index, result in enumerate(results):
             if result is None:
@@ -245,12 +250,24 @@ def to_pdf_book(doc: Document, results: list[PageResult | None], path: Path, sta
             css = (f"@font-face {{font-family: coptic; src: url({font.name});}} "
                    f"* {{font-family: coptic; font-size: {size:.1f}pt; line-height: {LINE_SPACING}; "
                    "margin: 0; text-align: justify;}")
+            rows = page_rows(result, stanzas)
             arabic_css = None
             if arabic_file is not None:
-                arabic_css = (f"@font-face {{font-family: arabic; src: url({arabic_file.name});}} "
-                              f"* {{font-family: arabic; font-size: {size * ARABIC_SCALE:.1f}pt; "
-                              f"line-height: {LINE_SPACING}; margin: 0; text-align: justify;}} "
-                              "p.title {text-align: center; font-weight: bold;}")
+                def arabic_style(points: float) -> str:
+                    return (f"@font-face {{font-family: arabic; src: url({arabic_file.name});}} "
+                            f"* {{font-family: arabic; font-size: {points:.1f}pt; line-height: {LINE_SPACING}; "
+                            "margin: 0; text-align: justify;} p.title {text-align: center; font-weight: bold;}")
+
+                # As large as the book prints it: each stanza's Arabic in no more lines than it had.
+                cell = area.x1 - divider - GUTTER
+                fitted = size * 0.6
+                for points in np.arange(size * 0.6, size * 1.6, size * 0.05):
+                    style = arabic_style(points)
+                    if all(measure(f'<p dir="rtl">{html.escape(row.arabic_text)}</p>', cell, style, arabic_archive)
+                           <= (len(row.arabic) + 0.6) * points * LINE_SPACING  # the engine adds half a line
+                           for row in rows if row.arabic_text):
+                        fitted = points
+                arabic_css = arabic_style(fitted)
             page, y = out.new_page(width=width, height=height), area.y0
 
             def room(needed: float) -> None:
@@ -258,12 +275,7 @@ def to_pdf_book(doc: Document, results: list[PageResult | None], path: Path, sta
                 if y + needed > area.y1 and y > area.y0:
                     page, y = out.new_page(width=width, height=height), area.y0
 
-            def measure(html_text: str, w: float, style: str, fonts: pymupdf.Archive) -> float:
-                ruler.clean_contents()
-                spare, _ = ruler.insert_htmlbox(pymupdf.Rect(0, 0, w, 10000), html_text, css=style, archive=fonts)
-                return 10000 - spare
-
-            for row in page_rows(result, stanzas):
+            for row in rows:
                 if row.is_title and row.title_text and arabic_css:
                     body = f'<p class="title" dir="rtl">{html.escape(row.title_text)}</p>'
                     h = measure(body, area.width, arabic_css, arabic_archive)

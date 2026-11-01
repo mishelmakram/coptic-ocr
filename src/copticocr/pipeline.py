@@ -148,6 +148,26 @@ def find_text_lines(gray: np.ndarray) -> list[list[TextLine]]:
     return result
 
 
+def _join_split_titles(lines: list[TextLine]) -> list[TextLine]:
+    """Rejoin a non-Coptic line that the column split cut in two (a title across both columns)."""
+    out: list[TextLine] = []
+    for line in lines:
+        partner = next((
+            other for other in out
+            if other.script == line.script == "arabic" and other.column != line.column
+            and min(other.box.y1, line.box.y1) - max(other.box.y0, line.box.y0) >= 0.5 * min(other.box.height,
+                                                                                             line.box.height)
+            and max(other.box.x0, line.box.x0) - min(other.box.x1, line.box.x1) < 3 * line.box.height
+        ), None)
+        if partner is None:
+            out.append(line)
+            continue
+        a, b = partner.box, line.box
+        partner.box = Box(min(a.x0, b.x0), min(a.y0, b.y0), max(a.x1, b.x1), max(a.y1, b.y1))
+        partner.column = min(partner.column, line.column)
+    return out
+
+
 def crop(gray: Image.Image, box: Box) -> Image.Image:
     return gray.crop((max(0, box.x0 - PAD), max(0, box.y0 - PAD),
                       min(gray.width, box.x1 + PAD), min(gray.height, box.y1 + PAD)))
@@ -183,6 +203,7 @@ class Engine:
                 if not coptic_column or not line.text or np.mean(line.confidences) < COPTIC_LINE_CONFIDENCE:
                     line.script, line.text, line.confidences = "arabic", "", []
             lines += column
+        lines = _join_split_titles(lines)
         if self.arabic is not None:
             arabic = [line for line in lines if line.script == "arabic"]
             self._read_lines(gray, arabic, self.arabic)
