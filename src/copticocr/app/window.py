@@ -307,9 +307,13 @@ class MainWindow(QMainWindow):
         row.setSpacing(6)
         row.addStretch(1)
         self.page_chip, self.read_chip, self.model_chip = QLabel(), QLabel(), QLabel()
-        for chip in (self.page_chip, self.read_chip, self.model_chip):
+        self.machine_chip = QLabel()
+        for chip in (self.machine_chip, self.page_chip, self.read_chip, self.model_chip):
             chip.setObjectName("chip")
             row.addWidget(chip)
+        self._machine_timer = QTimer(self, interval=5000, timeout=self._show_machine)
+        self._machine_timer.start()
+        self._show_machine()
 
         return footer
 
@@ -607,6 +611,25 @@ class MainWindow(QMainWindow):
         self.device = "GPU" if device.startswith("cuda") else "CPU"
         self.model_chip.setText(tr("model_ready"))
         self.model_chip.setToolTip(tr("model_info", self.checkpoint.parent.name, self.device))
+        self._show_machine()
+
+    def _show_machine(self) -> None:
+        """What the program works within: cores, free memory and (once the reader is up) the GPU."""
+        cores = os.cpu_count() or 1
+        free = enhance.available_memory() / 2 ** 30
+        device = getattr(self, "device", None)
+        self.machine_chip.setText(tr("machine", cores, f"{free:.1f}") + (" · GPU" if device == "GPU" else ""))
+        gpu = tr("machine_gpu_none")
+        if device == "GPU":
+            import torch  # already loaded by the reader
+            try:
+                room, _total = torch.cuda.mem_get_info()
+                gpu = tr("machine_gpu", torch.cuda.get_device_name(0), f"{room / 2 ** 30:.1f}")
+            except RuntimeError:
+                pass
+        elif not device:  # the reader starts with the first book
+            gpu = tr("machine_gpu_wait")
+        self.machine_chip.setToolTip(tr("machine_info", cores, f"{free:.1f}", gpu))
 
     def _reader_failed(self, error: str) -> None:
         self.reader = None

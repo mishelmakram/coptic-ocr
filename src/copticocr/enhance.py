@@ -220,24 +220,26 @@ def available_memory() -> int:
         return 2 * 2 ** 30
 
 
-def plan_workers(doc, pages: list[int], level: int) -> int:
-    """How many pages to enhance at once: one per processor core, as far as free memory allows.
+def page_memory(doc, pages: list[int], level: int) -> int:
+    """Bytes one page needs while it is enhanced (the largest of a few sample pages)."""
+    sample = sorted({pages[0], pages[len(pages) // 2], pages[-1]}) if pages else []
+    need = WORKER_BASE
+    for index in sample:
+        width, height = doc.page_image(index).size
+        factor = min(6.0, max(1.0, LEVELS[level].work_width / width))
+        need = max(need, WORKER_BASE + int(width * factor * height * factor * BYTES_PER_PIXEL))
+    return need
 
-    The largest of a few sample pages sets the memory a page needs, so a book with an odd
-    large plate does not run the machine out of memory.
-    """
+
+def plan_workers(doc, pages: list[int], level: int) -> int:
+    """How many pages to start enhancing at once: one per processor core, as far as the memory
+    free now allows. While the work runs, ``to_enhanced_pdf`` keeps checking (see there)."""
     import os
 
     cores = max(1, (os.cpu_count() or 2) - 1)
     if len(pages) <= 1:
         return 1
-    sample = sorted({pages[0], pages[len(pages) // 2], pages[-1]})
-    per_page = 0
-    for index in sample:
-        width, height = doc.page_image(index).size
-        factor = min(6.0, max(1.0, LEVELS[level].work_width / width))
-        per_page = max(per_page, WORKER_BASE + int(width * factor * height * factor * BYTES_PER_PIXEL))
-    return max(1, min(cores, len(pages), int(available_memory() * MEMORY_SHARE // per_page)))
+    return max(1, min(cores, len(pages), int(available_memory() * MEMORY_SHARE // page_memory(doc, pages, level))))
 
 
 def _page_outline(paths: list[Path], level: int, index: int) -> tuple[float, float, bytes | None]:
@@ -267,13 +269,15 @@ def to_enhanced_pdf(doc, results: list, path: Path, pages: list[int],
                     level: int = 1) -> bool:
     """``pages`` of ``doc`` cleaned and traced into a PDF of curves; False if stopped early.
 
-    Pages are traced in parallel, as many at once as the cores and the free memory allow
-    (``plan_workers``), and appended to the file in batches, so a book of thousands of pages
-    needs no more memory than a batch.
+    Pages are traced in parallel, as many at once as the cores and the free memory allow,
+    checked again before each page (``workers`` caps it), and appended to the file in
+    batches, so a book of thousands of pages needs no more memory than a batch.
     Pages that were read also carry their recognized text, invisible, for searching.
     ``progress(done, total)`` may return False to stop; the unfinished file is removed.
     """
     import os
+    import time
+    from collections import deque
     from concurrent.futures import ProcessPoolExecutor
     from functools import partial
 
@@ -281,9 +285,11 @@ def to_enhanced_pdf(doc, results: list, path: Path, pages: list[int],
 
     from .export import _pixmap, add_hidden_text
 
-    workers = workers or plan_workers(doc, pages, level)
+    cores = max(1, (os.cpu_count() or 2) - 1)
+    most = min(workers or cores, len(pages))
     work = partial(_page_outline, doc.paths, level)
-    pool = ProcessPoolExecutor(min(workers, len(pages))) if workers > 1 and len(pages) > 1 else None
+    pool = ProcessPoolExecutor(most) if most > 1 else None
+    per_page = page_memory(doc, pages, level) if pool else 0
     partial_path = path.with_name(path.name + ".part")
     partial_path.unlink(missing_ok=True)
     batch = pymupdf.open()
@@ -304,12 +310,36 @@ def to_enhanced_pdf(doc, results: list, path: Path, pages: list[int],
         batch.close()
         batch = pymupdf.open()
 
+    running: deque = deque()  # pages started, in page order
+    started: deque = deque()  # when recent pages started; they have not taken their memory yet
+    following = 0
+
+    def start_more() -> None:
+        """Start further pages while cores are idle and free memory holds another page.
+
+        Checked before every page, so the work slows when other programs take memory and
+        speeds up again when they free it. One page always runs, whatever the memory."""
+        nonlocal following
+        while following < len(pages) and len(running) < most:
+            now = time.monotonic()
+            while started and now - started[0] > 3:
+                started.popleft()
+            if running and available_memory() * MEMORY_SHARE < per_page * (1 + len(started)):
+                break
+            running.append(pool.submit(work, pages[following]))
+            started.append(now)
+            following += 1
+
     finished = False
     try:
-        outlines = pool.map(work, pages, chunksize=1) if pool else map(work, pages)
-        for done, (index, (width, height, drawing)) in enumerate(zip(pages, outlines)):
+        for done, index in enumerate(pages):
             if progress is not None and progress(done, len(pages)) is False:
                 return False
+            if pool is None:
+                width, height, drawing = work(index)
+            else:
+                start_more()
+                width, height, drawing = running.popleft().result()
             page = batch.new_page(width=width, height=height)
             if drawing is None:
                 page.insert_image(page.rect, pixmap=_pixmap(doc.page_image(index)))

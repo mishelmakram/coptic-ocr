@@ -107,6 +107,14 @@ STRINGS = {
     "pages_read": ("{0} صفحة مقروءة", "{0} pages read"),
     "reading": ("جاري القراءة… {0} من {1}", "Reading… {0} of {1}"),
     "loading_model": ("جاري تحميل الموديل…", "Loading model…"),
+    "machine": ("{0} نواة · {1} ج.ب متاحة", "{0} cores · {1} GB free"),
+    "machine_info": ("يعمل البرنامج في حدود جهازك:\n• المعالج: {0} نواة\n• الذاكرة المتاحة الآن: {1} ج.ب\n• {2}\n"
+                     "عدد الصفحات التي تُحسَّن معًا يتبع الذاكرة المتاحة أثناء العمل.",
+                     "The program works within your machine:\n• Processor: {0} cores\n• Free memory now: {1} GB\n• {2}\n"
+                     "How many pages are enhanced at once follows the free memory as it runs."),
+    "machine_gpu": ("كارت الشاشة: {0} ({1} ج.ب متاحة) — القراءة تتم عليه", "Graphics card: {0} ({1} GB free) — reading runs on it"),
+    "machine_gpu_none": ("القراءة على المعالج بكل الأنوية", "Reading runs on the processor, all cores"),
+    "machine_gpu_wait": ("كارت الشاشة: يُحدَّد عند جاهزية الموديل", "Graphics card: checked once the model is ready"),
     "model_info": ("الموديل: {0} · {1}", "Model: {0} · {1}"),
     "no_model": ("لم يُعثر على موديل. اختره من قائمة أدوات.",
                  "No model found. Choose one from the Tools menu."),

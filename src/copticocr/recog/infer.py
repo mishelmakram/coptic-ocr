@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -17,9 +18,25 @@ from .dataset import PAD_TO, load_image
 from .model import CRNN, HEIGHT, STRIDE
 
 
+GPU_ROOM = 600 * 2 ** 20  # free graphics memory a model and a batch of lines need
+
+
+def best_device() -> str:
+    """The graphics card when there is one with room on it (another program may hold its
+    memory), else the processor, using all its cores."""
+    if torch.cuda.is_available():
+        try:
+            if torch.cuda.mem_get_info()[0] >= GPU_ROOM:
+                return "cuda"
+        except RuntimeError:  # a card that cannot be queried is not one to rely on
+            pass
+    torch.set_num_threads(max(1, (os.cpu_count() or 2) - 1))
+    return "cpu"
+
+
 class Recognizer:
     def __init__(self, checkpoint: str | Path, device: str | None = None):
-        self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
+        self.device = torch.device(device or best_device())
         state = torch.load(checkpoint, map_location=self.device)
         self.charset = Charset(state["symbols"], state.get("script", "coptic"))
         self.model = CRNN(len(self.charset), state["hidden"]).to(self.device).eval()
