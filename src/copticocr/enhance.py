@@ -18,6 +18,7 @@ from PIL import Image, ImageFilter
 SPECK = 0.004  # of the letter height squared: ink shapes smaller than this are specks
 EDGE = 0.03  # of the page size: the margin where thin slivers are taken for the paper's edge
 BATCH = 50  # pages held in memory before they are appended to the file
+PINHOLE = 0.0012  # of the letter height squared: white holes this small inside ink are scanning faults
 
 
 @dataclass(frozen=True)
@@ -33,9 +34,9 @@ class Strength:
 
 
 LEVELS = {
-    1: Strength(2400, 0.0, 0.0, 1.0, 0.5),     # clean and trace
-    2: Strength(3000, 0.03, 0.0, 1.1, 0.5),    # and smooth the edges
-    3: Strength(3600, 0.05, 0.015, 1.2, 0.6),  # and mend broken strokes: like freshly printed
+    1: Strength(2400, 0.0, 0.0, 1.0, 0.5),       # clean and trace
+    2: Strength(3200, 0.045, 0.0, 1.2, 0.5),     # and smooth the edges, fill pinholes
+    3: Strength(4000, 0.065, 0.008, 1.3, 0.6),   # and mend broken strokes: like freshly printed
 }
 
 
@@ -77,19 +78,25 @@ def clean(image: Image.Image, level: int = 1) -> tuple[np.ndarray, float]:
         drop[k] |= thin and at_edge
     ink[np.isin(labels, np.flatnonzero(drop) + 1)] = False
 
-    if strength.repair:
-        radius = max(1, round(strength.repair * letter))
-        disk = np.hypot(*np.mgrid[-radius:radius + 1, -radius:radius + 1]) <= radius
-        ink = ndimage.binary_closing(ink, structure=disk)  # hairline breaks in a stroke
     if strength.smooth or strength.repair:
+        # The eyes of letters (ϧ, ⲑ, ⲁ): white enclosed by ink and larger than a pinhole.
+        # Mending and smoothing may close them; they are put back at the end.
         holes, _ = ndimage.label(~ink)
+        background = np.unique(np.concatenate([holes[0], holes[-1], holes[:, 0], holes[:, -1]]))
+        enclosed = (holes > 0) & ~np.isin(holes, background)
         hole_areas = np.bincount(holes.ravel())
-        pinholes = np.flatnonzero(hole_areas < SPECK * letter ** 2)
-        ink[np.isin(holes, pinholes[pinholes > 0])] = True  # white specks inside strokes
-    if strength.smooth:
-        # Blurring the ink and cutting it at half rounds off jags and nicks but keeps any
-        # stroke wider than the blur, so thin marks (jinkim, harakat) stay.
-        ink = ndimage.gaussian_filter(ink.astype(np.float32), strength.smooth * letter) > 0.5
+        small = hole_areas < PINHOLE * letter ** 2
+        eyes = enclosed & ~small[holes]
+        ink |= enclosed & small[holes]  # pinholes: white specks inside strokes
+        if strength.repair:
+            radius = max(1, round(strength.repair * letter))
+            disk = np.hypot(*np.mgrid[-radius:radius + 1, -radius:radius + 1]) <= radius
+            ink = ndimage.binary_closing(ink, structure=disk)  # hairline breaks in a stroke
+        if strength.smooth:
+            # Blurring the ink and cutting it at half rounds off jags and nicks but keeps any
+            # stroke wider than the blur, so thin marks (jinkim, harakat) stay.
+            ink = ndimage.gaussian_filter(ink.astype(np.float32), strength.smooth * letter) > 0.5
+        ink &= ~eyes
     return ink, factor
 
 
@@ -110,6 +117,28 @@ def preview(image: Image.Image, level: int = 1) -> Image.Image:
     ink, factor = clean(image, level)
     cleaned = Image.fromarray(np.where(ink, 0, 255).astype(np.uint8))
     return cleaned.resize(image.size, Image.LANCZOS) if factor > 1 else cleaned
+
+
+def vector_preview(image: Image.Image, level: int = 1) -> tuple[Image.Image, float]:
+    """The page exactly as the enhanced PDF draws it, rendered at the tracing resolution.
+
+    Returns the picture and the scale that brings its pixels back to the scan's, so a
+    viewer can lay it over the scan's coordinates and still zoom in on fine detail.
+    """
+    import pymupdf
+
+    ink, _ = clean(image, level)
+    width, height = image.size
+    with pymupdf.open() as doc:
+        page = doc.new_page(width=width, height=height)
+        xref = doc.get_new_xref()
+        doc.update_object(xref, "<<>>")
+        doc.update_stream(xref, outline_ops(ink, width / ink.shape[1], height, level))
+        page.set_contents(xref)
+        zoom = ink.shape[1] / width
+        pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), colorspace=pymupdf.csGRAY)
+        picture = Image.frombytes("L", (pix.width, pix.height), pix.samples)
+    return picture, width / picture.width
 
 
 def outline_ops(ink: np.ndarray, scale: float, page_height: float, level: int = 1) -> bytes:

@@ -54,12 +54,14 @@ class PageView(QGraphicsView):
         self._page, self._lines, self._result, self._selected = None, [], None, -1
 
     def show_page(self, image: Image.Image, result: PageResult | None, quiet: bool = False,
-                  fade: bool = False) -> None:
+                  fade: bool = False, scale: float = 1.0) -> None:
+        """Show ``image`` (drawn ``scale`` times its pixel size, for pictures finer than the scan)."""
         selected = self._selected
         self.quiet = quiet
         self.clear()
         self._page = self.scene().addPixmap(to_pixmap(image))
         self._page.setTransformationMode(Qt.SmoothTransformation)
+        self._page.setScale(scale)
         if fade:
             self._page.setOpacity(0.0)
             appear = QVariantAnimation(self)
@@ -70,7 +72,7 @@ class PageView(QGraphicsView):
             page = self._page
             appear.valueChanged.connect(lambda value: page.setOpacity(value) if page.scene() else None)
             appear.start(QVariantAnimation.DeleteWhenStopped)
-        self.scene().setSceneRect(QRectF(self._page.pixmap().rect()).adjusted(-40, -40, 40, 40))
+        self.scene().setSceneRect(self._page.sceneBoundingRect().adjusted(-40, -40, 40, 40))
         self.set_result(result)
         if 0 <= selected < len(self._lines):
             self.select_line(selected, scroll=False)
@@ -123,7 +125,7 @@ class PageView(QGraphicsView):
             return
         self._fit = True
         self.resetTransform()
-        width = self._page.pixmap().width() + 80
+        width = self._page.sceneBoundingRect().width() + 80
         scale = (self.viewport().width() - 4) / width
         self.scale(scale, scale)
 

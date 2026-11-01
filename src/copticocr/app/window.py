@@ -491,7 +491,8 @@ class MainWindow(QMainWindow):
         if self.enhanced_action.isChecked():
             key = (self.current, self.enhance_level)
             if key in self._enhanced:
-                self.view.show_page(self._enhanced[key], result, quiet=True, fade=True)
+                picture, scale = self._enhanced[key]
+                self.view.show_page(picture, result, quiet=True, fade=True, scale=scale)
             else:
                 self._enhance_in_background(key)
             return
@@ -507,7 +508,8 @@ class MainWindow(QMainWindow):
         image = self.page_image
         self.toast.show_message(tr("enhancing_page", level), 0, busy=True)
         holder = {}
-        job = Job(lambda _report: holder.setdefault("image", enhance.preview(image, level)) is not None)
+        # The real result (traced curves), rendered finely enough to zoom into.
+        job = Job(lambda _report: holder.setdefault("image", enhance.vector_preview(image, level)) is not None)
 
         def ready(_completed: bool, error: str) -> None:
             self._preview_job = None
@@ -521,7 +523,8 @@ class MainWindow(QMainWindow):
             if wanted is not None and wanted != key:
                 self._enhance_in_background(wanted)
             elif self.enhanced_action.isChecked() and (self.current, self.enhance_level) == key:
-                self.view.show_page(holder["image"], self.results[self.current], quiet=True, fade=True)
+                picture, scale = holder["image"]
+                self.view.show_page(picture, self.results[self.current], quiet=True, fade=True, scale=scale)
 
         job.done.connect(ready)
         self._preview_job = job
