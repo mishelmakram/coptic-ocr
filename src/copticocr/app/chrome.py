@@ -221,13 +221,14 @@ class Toast(QFrame):
 
 
 class CoachCard(QFrame):
-    """The next step, in a sentence, with a button that takes it."""
+    """The next step, in a sentence, with a button that takes it: a slim strip under the header,
+    so it never covers the page."""
 
     def __init__(self):
         super().__init__()
         self.setObjectName("coach")
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(14, 10, 10, 10)
+        layout.setContentsMargins(18, 6, 12, 6)
         layout.setSpacing(12)
         self.step = QLabel()
         self.step.setObjectName("stepChip")
@@ -245,7 +246,6 @@ class CoachCard(QFrame):
         layout.addWidget(self.close)
         self._callback = None
         self.action.clicked.connect(lambda: self._callback and self._callback())
-        shadow(self, 30, 45, 8)
         self.hide()
         self.current = None
 
@@ -258,11 +258,7 @@ class CoachCard(QFrame):
         self.action.setVisible(bool(button))
         self.action.setText(button or "")
         self._callback = callback
-        self.adjustSize()
-        if self.parent() is not None:
-            self.parent().place()
-        self.setGraphicsEffect(None)  # the fade's opacity effect replaces the shadow while it runs
-        fade(self, True, SLOW, done=lambda: shadow(self, 30, 45, 8))
+        fade(self, True, SLOW)
 
     def dismiss(self) -> None:
         self.current = None
@@ -325,12 +321,16 @@ class FloatingBar(QFrame):
         self.page.setMinimumWidth(84)
         self.next = tool_button("pillButton")
         self.zoom_out = tool_button("pillButton")
+        self.zoom = QLabel("100%")
+        self.zoom.setObjectName("pillLabel")
+        self.zoom.setAlignment(Qt.AlignCenter)
+        self.zoom.setMinimumWidth(48)
         self.zoom_in = tool_button("pillButton")
         self.fit = tool_button("pillButton")
         self.level = LevelControl(level_label, more_text)
         self.level_divider = self._divider()
-        for widget in (self.previous, self.page, self.next, self._divider(), self.zoom_out, self.zoom_in, self.fit,
-                       self.level_divider, self.level):
+        for widget in (self.previous, self.page, self.next, self._divider(), self.zoom_out, self.zoom, self.zoom_in,
+                       self.fit, self.level_divider, self.level):
             layout.addWidget(widget)
         self.show_level(False)
         shadow(self, 28, 55, 8)
@@ -351,17 +351,17 @@ class FloatingBar(QFrame):
 
 
 class Canvas(QWidget):
-    """Holds the page (or the welcome screen), with the guide card above it and the
-    floating bar and messages over its bottom edge."""
+    """Holds the page (or the welcome screen), with the floating bar and messages over its
+    bottom edge."""
 
-    def __init__(self, content: QWidget, bar: FloatingBar, toast: Toast, coach: CoachCard):
+    def __init__(self, content: QWidget, bar: FloatingBar, toast: Toast):
         super().__init__()
         self.setObjectName("canvasArea")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(content)
-        self.bar, self.toast, self.coach = bar, toast, coach
-        for widget in (coach, toast, bar):
+        self.bar, self.toast = bar, toast
+        for widget in (toast, bar):
             widget.setParent(self)
             widget.raise_()
 
@@ -372,14 +372,52 @@ class Canvas(QWidget):
         self.toast.move(QPoint((self.width() - self.toast.width()) // 2,
                                self.bar.y() - self.toast.height() - 12 if self.bar.isVisible()
                                else self.height() - self.toast.height() - 28))
-        width = min(620, self.width() - 48)
-        self.coach.setFixedWidth(width)
-        self.coach.adjustSize()
-        self.coach.move(QPoint((self.width() - width) // 2, 18))
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self.place()
+
+
+class Stepper(QFrame):
+    """The work in three numbered steps (read, check, export); the step to take next stands out,
+    steps already taken carry a tick."""
+
+    def __init__(self, labels: list[str], extra: str):
+        super().__init__()
+        self.setObjectName("stepper")
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        self.labels = labels
+        self.steps: list[QPushButton] = []
+        for i, label in enumerate(labels):
+            if i:
+                line = QFrame()
+                line.setObjectName("stepLine")
+                line.setFixedSize(18, 2)
+                layout.addWidget(line)
+            button = QPushButton()
+            button.setObjectName("step")
+            button.setCursor(Qt.PointingHandCursor)
+            layout.addWidget(button)
+            self.steps.append(button)
+            if i == 0:
+                self.extra = QPushButton(extra)  # read every page, beside "read this page"
+                self.extra.setObjectName("stepExtra")
+                self.extra.setCursor(Qt.PointingHandCursor)
+                layout.addWidget(self.extra)
+        self.set_current(0, set())
+
+    def set_current(self, current: int, done: set[int]) -> None:
+        digits = "١٢٣" if self.layoutDirection() == Qt.RightToLeft else "123"
+        for i, (button, label) in enumerate(zip(self.steps, self.labels)):
+            state = "done" if i in done else "current" if i == current else "todo"
+            mark = "✓" if state == "done" else digits[i]
+            button.setText(f"{mark}  {label}")
+            if button.property("state") != state:
+                button.setProperty("state", state)
+                button.style().unpolish(button)
+                button.style().polish(button)
 
 
 class PanelHeader(QWidget):

@@ -27,6 +27,7 @@ class LineItem(QGraphicsRectItem):
 
 class PageView(QGraphicsView):
     line_clicked = Signal(int)
+    zoomed = Signal(int)  # percent of the width that fits the view
 
     def __init__(self, theme: Theme):
         super().__init__()
@@ -128,12 +129,15 @@ class PageView(QGraphicsView):
         width = self._page.sceneBoundingRect().width() + 80
         scale = (self.viewport().width() - 4) / width
         self.scale(scale, scale)
+        self._fit_scale = scale
+        self.zoomed.emit(100)
 
     def zoom(self, factor: float) -> None:
         current = self.transform().m11()
         if 0.05 < current * factor < 8:
             self._fit = False
             self.scale(factor, factor)
+            self.zoomed.emit(round(100 * self.transform().m11() / getattr(self, "_fit_scale", 1.0)))
 
     def wheelEvent(self, event) -> None:
         if event.modifiers() & Qt.ControlModifier:

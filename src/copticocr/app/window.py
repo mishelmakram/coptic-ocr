@@ -177,11 +177,44 @@ class MainWindow(QMainWindow):
         brand.setObjectName("brand")
         self.doc_name = QLabel(tr("tagline"))
         self.doc_name.setObjectName("docName")
+        self.doc_name.setMaximumWidth(220)  # a long file name must not widen the window
         names.addStretch()
         names.addWidget(brand)
         names.addWidget(self.doc_name)
         names.addStretch()
         row.addLayout(names)
+        row.addSpacing(6)
+        self.open_button = self._button("ghost", self.open_action)
+        row.addWidget(self.open_button)
+        row.addWidget(chrome.stretch())
+
+        # The work in order: read, check, export. The step to take next stands out.
+        self.stepper = chrome.Stepper([tr("read_page"), tr("review_step"), tr("export")], tr("read_all_short"))
+        self.stepper.steps[0].clicked.connect(self.read_current)
+        self.stepper.extra.clicked.connect(self.read_all)
+        self.stepper.extra.setToolTip(tr("read_all_tip"))
+        self.stepper.steps[1].clicked.connect(self._start_review)
+        self.stepper.steps[2].clicked.connect(self.export)
+        self.stepper.steps[0].setToolTip(tr("read_page_tip"))
+        self.stepper.steps[1].setToolTip(tr("review_tip"))
+        self.stepper.steps[2].setToolTip(tr("export_tip"))
+        row.addWidget(self.stepper)
+
+        self.busy = QFrame()
+        self.busy.setObjectName("busy")
+        busy_row = QHBoxLayout(self.busy)
+        busy_row.setContentsMargins(12, 4, 4, 4)
+        busy_row.setSpacing(6)
+        self.busy_spinner = chrome.Spinner(14)
+        self.busy_text = QLabel()
+        self.busy_text.setObjectName("busyText")
+        self.stop_button = chrome.tool_button("stopButton", tr("stop"))
+        self.stop_button.clicked.connect(self.stop_action.trigger)
+        busy_row.addWidget(self.busy_spinner)
+        busy_row.addWidget(self.busy_text)
+        busy_row.addWidget(self.stop_button)
+        self.busy.hide()
+        row.addWidget(self.busy)
         row.addWidget(chrome.stretch())
 
         self.view_switch = chrome.Segmented([tr("original"), tr("converted"), tr("enhanced")])
@@ -189,30 +222,12 @@ class MainWindow(QMainWindow):
         self.view_switch.buttons[1].setToolTip(tr("converted_tip"))
         self.view_switch.buttons[2].setToolTip(tr("enhanced_tip"))
         row.addWidget(self.view_switch)
-        row.addWidget(chrome.stretch())
-
-        self.busy = QFrame()
-        self.busy.setObjectName("busy")
-        busy_row = QHBoxLayout(self.busy)
-        busy_row.setContentsMargins(12, 4, 4, 4)
-        busy_row.setSpacing(4)
-        self.busy_text = QLabel()
-        self.busy_text.setObjectName("busyText")
-        self.stop_button = chrome.tool_button("stopButton", tr("stop"))
-        self.stop_button.clicked.connect(self.stop_action.trigger)
-        busy_row.addWidget(self.busy_text)
-        busy_row.addWidget(self.stop_button)
-        self.busy.hide()
-        row.addWidget(self.busy)
-
-        self.header_buttons = [self._button("ghost", self.open_action), self._button("ghost", self.read_all_action),
-                               self._button("secondary", self.export_action), self._button("primary", self.read_action)]
-        for button in self.header_buttons:
-            row.addWidget(button)
-        self.more_button = chrome.tool_button("iconButton", tr("more"))
+        self.more_button = QPushButton(tr("settings"))
+        self.more_button.setObjectName("ghost")
+        self.more_button.setCursor(Qt.PointingHandCursor)
         self.more_button.setMenu(self.more_menu)
-        self.more_button.setPopupMode(QToolButton.InstantPopup)
         row.addWidget(self.more_button)
+        self.header_buttons = [self.open_button]
         return header
 
     def _build_body(self) -> QWidget:
@@ -240,6 +255,7 @@ class MainWindow(QMainWindow):
 
         self.view = PageView(self.theme)
         self.view.line_clicked.connect(self._line_clicked_on_page)
+        self.view.zoomed.connect(lambda percent: self.floating.zoom.setText(f"{percent}%"))
         self.stack = QStackedWidget()
         self.stack.setObjectName("stack")
         self.stack.addWidget(self._welcome())
@@ -261,7 +277,7 @@ class MainWindow(QMainWindow):
                             (self.floating.fit, "fit_width")):
             button.setToolTip(tr(key))
         self.floating.hide()
-        canvas = chrome.Canvas(self.stack, self.floating, self.toast, self.coach)
+        canvas = chrome.Canvas(self.stack, self.floating, self.toast)
 
         self.panel = ProofreadPanel(self.theme, self.coptic_font)
         self.panel.set_legacy_keys(self.keys_action.isChecked())
@@ -289,20 +305,16 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout(footer)
         row.setContentsMargins(16, 0, 16, 0)
         row.setSpacing(6)
-        self.footer_text = QLabel()
-        self.footer_text.setObjectName("footerText")
-        row.addWidget(self.footer_text, 1)
+        row.addStretch(1)
         self.page_chip, self.read_chip, self.model_chip = QLabel(), QLabel(), QLabel()
         for chip in (self.page_chip, self.read_chip, self.model_chip):
             chip.setObjectName("chip")
             row.addWidget(chip)
-        self._footer_timer = QTimer(self, singleShot=True, timeout=lambda: self.footer_text.setText(""))
+
         return footer
 
-    def notify(self, text: str, ms: int = 8000) -> None:
-        """A message over the page (fading in and out) that also stays a while in the footer."""
-        self.footer_text.setText(text)
-        self._footer_timer.start(ms)
+    def notify(self, text: str, ms: int = 4500) -> None:
+        """An event (a page read, a file saved) as a message fading in and out over the page."""
         self.toast.show_message(text, min(ms, 4500))
 
     def _build_frame(self) -> None:
@@ -317,7 +329,9 @@ class MainWindow(QMainWindow):
         self.line.setFixedHeight(3)
         self.line.hide()
         column.addWidget(self.line)
-        column.addWidget(self._build_body(), 1)
+        body = self._build_body()
+        column.addWidget(self.coach)  # the next step, between the header and the work, never over the page
+        column.addWidget(body, 1)
         column.addWidget(self._build_footer())
         self.setCentralWidget(root)
 
@@ -368,7 +382,9 @@ class MainWindow(QMainWindow):
         for button in self.header_buttons:
             color = t.on_accent if button.objectName() == "primary" else t.text
             button.setIcon(icons.icon(button.action_icon, color, 18))
-        self.more_button.setIcon(icons.icon("more", t.text))
+        self.more_button.setIcon(icons.icon("settings", t.text, 18))
+        self.busy_spinner.color = QColor(t.accent)
+        self.stepper.setLayoutDirection(self.layoutDirection())
         self.stop_button.setIcon(icons.icon("close", t.accent, 16))
         for button, name in ((self.floating.previous, "next" if self.layoutDirection() == Qt.RightToLeft else "prev"),
                              (self.floating.next, "prev" if self.layoutDirection() == Qt.RightToLeft else "next"),
@@ -435,7 +451,7 @@ class MainWindow(QMainWindow):
         chrome.slide_in(self.panel, 500)
         chrome.fade(self.floating, True)
         name = self.doc.name + (f"  +{len(self.doc.paths) - 1}" if len(self.doc.paths) > 1 else "")
-        self.doc_name.setText(self.doc_name.fontMetrics().elidedText(name, Qt.ElideMiddle, 300))
+        self.doc_name.setText(self.doc_name.fontMetrics().elidedText(name, Qt.ElideMiddle, 210))
         self.doc_name.setToolTip(str(self.doc.paths[0]))
         self.current = -1
         self.pages.setCurrentRow(0)
@@ -583,13 +599,14 @@ class MainWindow(QMainWindow):
         self.reader.page_read.connect(self._page_read)
         self.reader.page_failed.connect(
             lambda i, e: self.notify(tr("read_failed", i + 1, e), 8000))
-        self.model_chip.setText(tr("loading_model"))
+        self.model_chip.setText(tr("model_loading"))
         self.reader.start()
         return True
 
     def _reader_ready(self, device: str) -> None:
         self.device = "GPU" if device.startswith("cuda") else "CPU"
-        self.model_chip.setText(tr("model_info", self.checkpoint.parent.name, self.device))
+        self.model_chip.setText(tr("model_ready"))
+        self.model_chip.setToolTip(tr("model_info", self.checkpoint.parent.name, self.device))
 
     def _reader_failed(self, error: str) -> None:
         self.reader = None
@@ -641,7 +658,8 @@ class MainWindow(QMainWindow):
             self._show_current()
             self.panel.set_page(self.page_image, result)
             coptic = sum(line.script == "coptic" and bool(line.text) for line in result.lines)
-            self.notify(tr("page_done", index + 1, coptic), 15000)
+            arabic = sum(line.script == "arabic" and bool(line.text) for line in result.lines)
+            self.notify(tr("page_done", index + 1, coptic, arabic))
         self._update_state()
 
     def _stop_reader(self) -> None:
@@ -772,27 +790,61 @@ class MainWindow(QMainWindow):
             done = self.batch_total - len(self.pending)
             self.line.setMaximum(self.batch_total)
             self.line.setValue(done)
-            self.busy_text.setText(tr("reading", done + 1, self.batch_total))
-        self.busy.setVisible(busy)
+            self.busy_text.setText(tr("reading_page") if self.batch_total == 1
+                                   else tr("reading", done + 1, self.batch_total))
+        if busy and not self.busy.isVisible():
+            self.busy_spinner.start()
+        elif not busy:
+            self.busy_spinner.stop()
+        # The reading indicator takes the steps' place: hide one before showing the other, or for
+        # a moment the header needs both and widens the window.
+        if busy:
+            self.stepper.hide()
+            self.busy.show()
+        else:
+            self.busy.hide()
+            self.stepper.setVisible(has_doc)
         self.line.setVisible(busy)
         self._update_guide()
         if self.checkpoint is None:
-            self.model_chip.setText(tr("no_model"))
+            self.model_chip.setText(tr("no_model_short"))
+            self.model_chip.setToolTip(tr("no_model"))
         elif self.reader is None:
-            self.model_chip.setText(tr("model_info", self.checkpoint.parent.name,
-                                       "CPU" if self.cpu_action.isChecked() else "auto"))
+            self.model_chip.setText(tr("model_ready"))
+            self.model_chip.setToolTip(tr("model_info", self.checkpoint.parent.name,
+                                          "CPU" if self.cpu_action.isChecked() else "GPU / CPU"))
 
     def _update_guide(self) -> None:
-        """The guide card names the next step for the page on screen."""
-        if not self.guide_action.isChecked() or self.doc is None or self.pending or self._exported:
+        """The steps in the header and the guide strip follow the page on screen."""
+        if self.doc is None:
             self.coach.dismiss()
             return
-        if self.results[self.current] is None:
+        read = self.results[self.current] is not None
+        done = ({0} if read else set()) | ({1} if read and self._reviewed else set()) | ({2} if self._exported else set())
+        step = 0 if not read else 1 if not self._reviewed else 2
+        self.stepper.set_current(step, done)
+        if not self.guide_action.isChecked() or self.pending or self._exported:
+            self.coach.dismiss()
+        elif step == 0:
             self.coach.show_step("read", tr("step", 1, 3), tr("coach_read"), tr("read_page"), self.read_current)
-        elif not self._reviewed:
+        elif step == 1:
             self.coach.show_step("review", tr("step", 2, 3), tr("coach_review"), tr("got_it"), self._reviewed_now)
         else:
             self.coach.show_step("export", tr("step", 3, 3), tr("coach_export"), tr("export"), self.export)
+
+    def _start_review(self) -> None:
+        """Step 2: open the first line worth a look (else the first line) for correcting."""
+        result = self.results[self.current] if self.doc is not None else None
+        if result is None:
+            self.notify(tr("read_first"))
+            return
+        lines = [i for i, line in enumerate(result.lines) if line.text]
+        unsure = [i for i in lines if result.lines[i].confidence < 0.9]
+        if lines:
+            target = (unsure or lines)[0]
+            self.panel.select(target)
+            self.view.select_line(target)
+        self._reviewed_now()
 
     def _reviewed_now(self) -> None:
         self._reviewed = True

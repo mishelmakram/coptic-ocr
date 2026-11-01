@@ -20,6 +20,12 @@ REVIEW_BELOW = 0.9  # lines with a less certain letter are flagged for checking
 class CopticLineEdit(QLineEdit):
     """A line editor that can turn Latin keys into Coptic, as the CS fonts do."""
 
+    focused = Signal()
+
+    def focusInEvent(self, event) -> None:
+        super().focusInEvent(event)
+        self.focused.emit()
+
     def __init__(self, text: str, coptic_font: QFont):
         super().__init__(text)
         self.setFont(coptic_font)
@@ -55,18 +61,19 @@ class LineCard(QFrame):
         self.index = index
         self.line = line
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 8, 10, 10)
+        layout.setContentsMargins(10, 6, 10, 6)
         layout.setSpacing(6)
 
-        header = QHBoxLayout()
+        # One row: number, text, mark; the printed line appears under it when the card is chosen.
+        row = QHBoxLayout()
+        row.setSpacing(8)
         number = QLabel(str(index + 1))
         number.setObjectName("lineNumber")
-        header.addWidget(number)
-        header.addStretch()
+        number.setFixedWidth(22)
+        number.setAlignment(Qt.AlignCenter)
+        row.addWidget(number)
         self.badge = QLabel()
         self.badge.setObjectName("badge")
-        header.addWidget(self.badge)
-        layout.addLayout(header)
 
         picture = QLabel()
         picture.setObjectName("lineImage")
@@ -76,18 +83,23 @@ class LineCard(QFrame):
             pixmap = pixmap.scaledToWidth(width, Qt.SmoothTransformation)
         picture.setPixmap(pixmap)
         picture.setLayoutDirection(Qt.LeftToRight)
-        layout.addWidget(picture)
+        picture.hide()
+        self.picture = picture
 
         self.edit = CopticLineEdit(line.text, coptic_font)
         self.edit.legacy_keys = legacy_keys
         if line.script == "arabic":
             self.edit.setLayoutDirection(Qt.RightToLeft)
-            self.edit.setPlaceholderText(tr("arabic_soon"))
+            self.edit.setPlaceholderText(tr("arabic_empty"))
             self.edit.setFont(QFont("Segoe UI", 12))
         else:
             self.edit.setLayoutDirection(Qt.LeftToRight)
         self.edit.textEdited.connect(self._on_edit)
-        layout.addWidget(self.edit)
+        self.edit.focused.connect(lambda: None if self.property("selected") else self.clicked.emit(self.index))
+        row.addWidget(self.edit, 1)
+        row.addWidget(self.badge)
+        layout.addLayout(row)
+        layout.addWidget(picture)
         self.set_theme(theme)
 
     def set_theme(self, theme: Theme) -> None:
@@ -104,6 +116,7 @@ class LineCard(QFrame):
         self.badge.show()
 
     def set_selected(self, selected: bool) -> None:
+        self.picture.setVisible(selected)
         self.setProperty("selected", selected)
         self.style().unpolish(self)
         self.style().polish(self)

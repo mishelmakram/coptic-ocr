@@ -12,10 +12,11 @@ from ..export import UNICODE_FONT
 from ..legacy import layouts
 from .i18n import tr
 
-FORMATS = [("book_pdf", "fmt_book_pdf", "PDF (*.pdf)"), ("book_docx", "fmt_book_docx", "Word (*.docx)"),
-           ("enhanced", "fmt_enhanced", "PDF (*.pdf)"),
+FORMATS = [("book_pdf", "fmt_book_pdf", "PDF (*.pdf)"), ("enhanced", "fmt_enhanced", "PDF (*.pdf)"),
            ("typeset", "fmt_typeset", "PDF (*.pdf)"), ("pdf", "fmt_pdf", "PDF (*.pdf)"),
-           ("docx", "fmt_docx", "Word (*.docx)"), ("txt", "fmt_txt", "Text (*.txt)")]
+           ("book_docx", "fmt_book_docx", "Word (*.docx)"), ("docx", "fmt_docx", "Word (*.docx)"),
+           ("txt", "fmt_txt", "Text (*.txt)")]
+GROUPS = {"book_pdf": "for_reading", "book_docx": "for_editing"}  # a heading before these
 BOOK = ("book_pdf", "book_docx")
 WORD = ("book_docx", "docx")
 
@@ -56,6 +57,10 @@ class ExportDialog(QDialog):
         box = QVBoxLayout(group)
         self.formats = QButtonGroup(self)
         for i, (fmt, key, _) in enumerate(FORMATS):
+            if fmt in GROUPS:
+                heading = QLabel(tr(GROUPS[fmt]))
+                heading.setObjectName("formatHeading")
+                box.addWidget(heading)
             button = QRadioButton(tr(key))
             button.setChecked(fmt == start)
             button.setEnabled(pages_read > 0 or fmt == "enhanced")  # only enhancing needs no reading

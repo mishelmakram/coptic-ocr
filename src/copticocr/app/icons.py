@@ -27,6 +27,8 @@ PATHS = {
     "more": '<circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/>',
     "close": '<path d="M7 7l10 10M17 7L7 17"/>',
     "page": '<path d="M7 3h7l5 5v12a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v5h5"/>',
+    "settings": '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1'
+                'M2 12h3M19 12h3M4.9 19.1L7 17M17 7l2.1-2.1"/>',
     "prev": '<path d="M15 6l-6 6 6 6"/>',
     "next": '<path d="M9 6l6 6-6 6"/>',
 }

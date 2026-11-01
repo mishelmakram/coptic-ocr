@@ -103,11 +103,23 @@ def style_sheet(t: Theme) -> str:
     QToolButton#stopButton:hover {{ background: {t.surface}; }}
 
     QFrame#segmented {{ background: transparent; }}
-    QToolButton#segment {{ border: none; border-radius: 8px; padding: 6px 14px; color: {t.muted};
+    QToolButton#segment {{ border: none; border-radius: 8px; padding: 6px 11px; color: {t.muted};
                            font-weight: 600; }}
     QToolButton#segment:hover {{ color: {t.text}; }}
     QToolButton#segment:checked {{ background: transparent; color: {t.text}; }}
-    QToolButton#segment:disabled {{ color: {t.border}; }}
+    QToolButton#segment:disabled {{ color: {t.muted}; }}
+
+    QPushButton#step {{ background: transparent; border: 1px solid {t.border}; border-radius: 17px;
+                        padding: 7px 16px; color: {t.muted}; }}
+    QPushButton#step:hover {{ border-color: {t.accent}; color: {t.text}; }}
+    QPushButton#step[state="current"] {{ background: {t.accent}; border-color: {t.accent}; color: {t.on_accent}; }}
+    QPushButton#step[state="current"]:hover {{ background: {t.accent_hover}; }}
+    QPushButton#step[state="done"] {{ background: {t.accent_soft}; border-color: {t.accent_soft}; color: {t.accent}; }}
+    QFrame#stepLine {{ background: {t.border}; }}
+    QPushButton#stepExtra {{ background: transparent; border: none; border-radius: 12px; padding: 5px 10px;
+                             color: {t.muted}; }}
+    QPushButton#stepExtra:hover {{ background: {t.sunken}; color: {t.text}; }}
+    QPushButton#ghost::menu-indicator {{ image: none; width: 0; }}
 
     QMenu {{ background: {t.surface}; border: 1px solid {t.border}; border-radius: 10px; padding: 6px; }}
     QMenu::item {{ padding: 8px 28px 8px 14px; border-radius: 7px; }}
@@ -141,9 +153,9 @@ def style_sheet(t: Theme) -> str:
 
     QFrame#toast {{ background: {t.text}; border-radius: 12px; }}
     QLabel#toastText {{ color: {t.surface}; font-weight: 600; }}
-    QFrame#coach {{ background: {t.surface}; border: 1px solid {t.border}; border-radius: 14px; }}
+    QFrame#coach {{ background: {t.accent_soft}; border: none; border-bottom: 1px solid {t.border}; }}
     QLabel#coachText {{ color: {t.text}; }}
-    QLabel#stepChip {{ background: {t.accent_soft}; color: {t.accent}; border-radius: 12px; padding: 4px 10px;
+    QLabel#stepChip {{ background: {t.surface}; color: {t.accent}; border-radius: 12px; padding: 4px 10px;
                        font-weight: 700; min-width: 38px; }}
     QPushButton#primarySmall {{ background: {t.accent}; color: {t.on_accent}; border: none; border-radius: 9px;
                                 padding: 6px 14px; }}
@@ -167,7 +179,8 @@ def style_sheet(t: Theme) -> str:
     QFrame#lineCard {{ background: {t.surface}; border: 1px solid {t.border}; border-radius: 12px; }}
     QFrame#lineCard:hover {{ border-color: {t.muted}; }}
     QFrame#lineCard[selected="true"] {{ border: 2px solid {t.accent}; background: {t.accent_soft}; }}
-    QLabel#lineNumber {{ color: {t.muted}; font-size: 9pt; font-weight: 600; }}
+    QLabel#formatHeading {{ color: {t.muted}; font-size: 9pt; font-weight: 700; padding-top: 6px; }}
+    QLabel#lineNumber {{ color: {t.muted}; font-size: 9pt; font-weight: 700; }}
     QLabel#badge {{ border-radius: 9px; padding: 1px 9px; font-size: 8pt; font-weight: 700; }}
     QLabel#lineImage {{ background: #FFFFFF; border-radius: 8px; padding: 2px; }}
     QLineEdit {{ background: {t.sunken}; border: 1px solid transparent; border-radius: 8px; padding: 6px 10px; }}
@@ -181,7 +194,7 @@ def style_sheet(t: Theme) -> str:
     /* Footer */
     QFrame#footer {{ background: {t.surface}; border-top: 1px solid {t.border}; }}
     QLabel#footerText {{ color: {t.muted}; font-size: 9pt; }}
-    QLabel#chip {{ background: {t.sunken}; color: {t.muted}; border-radius: 9px; padding: 2px 9px;
+    QLabel#chip {{ background: {t.sunken}; color: {t.text}; border-radius: 9px; padding: 3px 10px;
                    font-size: 9pt; }}
 
     /* Dialogs and controls */
