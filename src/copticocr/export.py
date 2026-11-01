@@ -190,12 +190,13 @@ def typeset_page(out: pymupdf.Document, image, result: PageResult, size: tuple[f
     scale = page.rect.width / result.size[0]
     if arabic:
         fonts = pymupdf.Archive(str(arabic_font.parent))
-        size = sorted(line.box.height for line in arabic)[len(arabic) // 2] * scale * 0.62
+        size = sorted(line.box.height for line in arabic)[len(arabic) // 2] * scale * 0.75
         css = _arabic_css(arabic_font, size, "text-align: right;")
         for line in arabic:
             b = line.box
-            bottom = b.y1 * scale + size * 0.35
-            rect = pymupdf.Rect(min(b.x0 * scale, b.x1 * scale - size), bottom - size * 1.4, b.x1 * scale, bottom)
+            # Arabic fonts have tall line boxes (marks above and below): give the type room, or it shrinks.
+            bottom = b.y1 * scale + size * 0.75
+            rect = pymupdf.Rect(min(b.x0 * scale, b.x1 * scale - size), bottom - size * 2.4, b.x1 * scale, bottom)
             page.insert_htmlbox(rect, f'<p dir="rtl">{html.escape(line.text)}</p>', css=css, archive=fonts,
                                 scale_low=0)
     if not lines:
