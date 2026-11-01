@@ -24,6 +24,14 @@ STRINGS = {
                       "Show the page with its Coptic set in type instead of the scan (Ctrl+T)"),
     "page_done": ("تمت قراءة الصفحة {0}: {1} سطر قبطي. راجع النص في لوحة السطور ثم صدّر الملف.",
                   "Page {0} read: {1} Coptic lines. Check the text in the Lines panel, then export."),
+    "enhanced": ("تحسين الجودة", "Enhance"),
+    "enhanced_tip": ("عرض الصفحة بعد التنضيف: ورق أبيض، كتابة سوداء نقية، بدون نمش (Ctrl+H)",
+                     "Show the page cleaned: white paper, crisp black ink, no specks (Ctrl+H)"),
+    "fmt_enhanced": ("PDF محسّن الجودة: كتابة نقية لا تبكسل في الزوم (لا يحتاج قراءة)",
+                     "Enhanced PDF: crisp text that stays sharp at any zoom (no reading needed)"),
+    "pages_all": ("كل صفحات الملف ({0})", "Every page of the file ({0})"),
+    "enhancing": ("جاري تحسين الصفحات…", "Enhancing pages…"),
+    "enhancing_of": ("صفحة {0} من {1}", "Page {0} of {1}"),
     "zoom_in": ("تكبير", "Zoom in"),
     "zoom_out": ("تصغير", "Zoom out"),
     "fit_width": ("ملاءمة العرض", "Fit width"),
@@ -41,10 +49,12 @@ STRINGS = {
         "<h3>Coptic OCR</h3><p>برنامج مفتوح المصدر للتعرف على نصوص الكتب الكنسية القبطية "
         "وتحويلها إلى PDF قابل للبحث وWord ونص.</p>"
         "<p>الترخيص: GNU AGPL 3.0<br>المؤلف: ميشيل مكرم</p>"
-        "<p>خط Noto Sans Coptic مرخص برخصة SIL Open Font License.</p>",
+        "<p>خط Noto Sans Coptic مرخص برخصة SIL Open Font License. "
+        "تحسين الصفحات يستخدم Potrace (رخصة GPL).</p>",
         "<h3>Coptic OCR</h3><p>Open-source OCR for Coptic church books: searchable PDF, "
         "Word and plain text.</p><p>License: GNU AGPL 3.0<br>Author: Mishel Makram</p>"
-        "<p>Noto Sans Coptic is licensed under the SIL Open Font License.</p>"),
+        "<p>Noto Sans Coptic is licensed under the SIL Open Font License. "
+        "Page enhancement uses Potrace (GPL).</p>"),
     "quit": ("خروج", "Quit"),
     "welcome_title": ("ابدأ بفتح كتاب", "Start by opening a book"),
     "welcome_body": ("اسحب ملف PDF أو صور الصفحات إلى هنا، أو اضغط فتح.",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import multiprocessing
 import sys
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from .i18n import language, set_language
 
 
 def main(argv: list[str] | None = None) -> int:
+    multiprocessing.freeze_support()  # enhancing uses worker processes, also in a frozen build
     argv = sys.argv if argv is None else argv
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(argv)

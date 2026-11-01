@@ -8,17 +8,17 @@ from pathlib import Path
 from PySide6.QtCore import QSettings, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QFont, QIcon, QKeySequence, QPixmap
 from PySide6.QtWidgets import (QApplication, QFileDialog, QFrame, QLabel, QListWidget, QListWidgetItem,
-                               QMainWindow, QMessageBox, QProgressBar, QPushButton, QSizePolicy, QSplitter,
-                               QStackedWidget, QToolBar, QVBoxLayout, QWidget)
+                               QMainWindow, QMessageBox, QProgressBar, QProgressDialog, QPushButton, QSizePolicy,
+                               QSplitter, QStackedWidget, QToolBar, QVBoxLayout, QWidget)
 
-from .. import book, export
+from .. import book, enhance, export
 from ..pipeline import IMAGE_SUFFIXES, Document, PageResult
 from . import icons, theme as themes
 from .export_dialog import ExportDialog
 from .i18n import language, tr
 from .pageview import PageView, to_pixmap
 from .proofread import ProofreadPanel
-from .worker import Reader
+from .worker import Job, Reader
 
 THUMB = QSize(96, 132)
 
@@ -100,8 +100,11 @@ class MainWindow(QMainWindow):
         self.zoom_out_action = self._action("zoom_out", lambda: self.view.zoom(1 / 1.2), QKeySequence.ZoomOut,
                                             "zoom_out")
         self.fit_action = self._action("fit_width", lambda: self.view.fit_width(), "Ctrl+0", "fit")
-        self.converted_action = self._action("converted", lambda _: self._show_current(), "Ctrl+T", "type",
-                                             "converted_tip", checkable=True)
+        self.converted_action = self._action("converted", lambda _: self._view_mode(self.converted_action), "Ctrl+T",
+                                             "type", "converted_tip", checkable=True)
+        self.enhanced_action = self._action("enhanced", lambda _: self._view_mode(self.enhanced_action), "Ctrl+H",
+                                            "wand", "enhanced_tip", checkable=True)
+        self._enhanced: dict[int, object] = {}  # page index -> cleaned page, for the view
         self.dark_action = self._action("dark_mode", self.toggle_dark, "Ctrl+Shift+D", "moon", checkable=True)
         self.dark_action.setChecked(self.theme.dark)
         self.keys_action = self._action("keyboard", self.toggle_keys, None, "keyboard", "keyboard_tip",
@@ -117,7 +120,7 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
         menu.addAction(tr("quit"), QKeySequence.Quit, self.close)
         menu = self.menuBar().addMenu(tr("view"))
-        menu.addAction(self.converted_action)
+        menu.addActions([self.converted_action, self.enhanced_action])
         menu.addActions([self.zoom_in_action, self.zoom_out_action, self.fit_action])
         menu.addSeparator()
         menu.addAction(self.dark_action)
@@ -155,6 +158,7 @@ class MainWindow(QMainWindow):
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         bar.addWidget(spacer)
         bar.addAction(self.converted_action)
+        bar.addAction(self.enhanced_action)
         bar.addSeparator()
         for action in (self.zoom_out_action, self.zoom_in_action, self.fit_action, self.keys_action,
                        self.dark_action):
@@ -355,8 +359,22 @@ class MainWindow(QMainWindow):
             return
         result = self.results[self.current]
         converted = self.converted_action.isChecked() and result is not None
+        if self.enhanced_action.isChecked():
+            if self.current not in self._enhanced:
+                QApplication.setOverrideCursor(Qt.WaitCursor)
+                self._enhanced = {self.current: enhance.preview(self.page_image)}  # keep one page
+                QApplication.restoreOverrideCursor()
+            self.view.show_page(self._enhanced[self.current], result, quiet=True)
+            return
         image = typeset_preview(self.page_image, result) if converted else self.page_image
         self.view.show_page(image, result, quiet=converted)
+
+    def _view_mode(self, chosen: QAction) -> None:
+        """The converted and enhanced views exclude each other; neither shows the scan."""
+        for action in (self.converted_action, self.enhanced_action):
+            if action is not chosen:
+                action.setChecked(False)
+        self._show_current()
 
     def _line_clicked_on_page(self, index: int) -> None:
         self.view.select_line(index, scroll=False)
@@ -429,6 +447,7 @@ class MainWindow(QMainWindow):
             item.setText(f"✓ {index + 1}")
         if index == self.current:
             self.converted_action.setChecked(True)  # show what the reading produced
+            self.enhanced_action.setChecked(False)
             self._show_current()
             self.panel.set_page(self.page_image, result)
             coptic = sum(line.script == "coptic" and bool(line.text) for line in result.lines)
@@ -457,11 +476,10 @@ class MainWindow(QMainWindow):
 
     # Export -------------------------------------------------------------
     def export(self) -> None:
-        read = sum(r is not None for r in self.results)
-        if not read:
-            QMessageBox.information(self, tr("app_name"), tr("nothing_to_export"))
+        if self.doc is None:
             return
-        dialog = ExportDialog(self, read)
+        read = sum(r is not None for r in self.results)
+        dialog = ExportDialog(self, read, len(self.doc), "book_pdf" if read else "enhanced")
         if dialog.exec() != ExportDialog.Accepted:
             return
         choice = dialog.choice()
@@ -471,6 +489,10 @@ class MainWindow(QMainWindow):
         start = Path(self.settings.value("last_dir", str(Path.home()))) / f"{self.doc.name}.{choice.suffix}"
         path, _ = QFileDialog.getSaveFileName(self, tr("export"), str(start), choice.file_filter)
         if not path:
+            return
+        if choice.format == "enhanced":
+            pages = [self.current] if choice.current_page_only else list(range(len(self.doc)))
+            self._enhance_to(Path(path), pages)
             return
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
@@ -493,6 +515,33 @@ class MainWindow(QMainWindow):
         QApplication.restoreOverrideCursor()
         self.statusBar().showMessage(tr("saved", path), 8000)
 
+    def _enhance_to(self, path: Path, pages: list[int]) -> None:
+        """Write the enhanced PDF on a background thread, with progress and a way to cancel."""
+        progress = QProgressDialog(tr("enhancing"), tr("cancel"), 0, len(pages), self)
+        progress.setWindowTitle(tr("enhanced"))
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        results = list(self.results)
+        job = Job(lambda report: enhance.to_enhanced_pdf(self.doc, results, path, pages, report))
+
+        def advanced(done: int, total: int) -> None:
+            progress.setValue(done)
+            progress.setLabelText(f"{tr('enhancing')}\n{tr('enhancing_of', min(done + 1, total), total)}")
+
+        def finished(completed: bool, error: str) -> None:
+            progress.close()
+            self._job = None
+            if error:
+                QMessageBox.critical(self, tr("app_name"), tr("save_failed", error))
+            elif completed:
+                self.statusBar().showMessage(tr("saved", path), 8000)
+
+        job.progressed.connect(advanced)
+        job.done.connect(finished)
+        progress.canceled.connect(lambda: setattr(job, "cancelled", True))
+        self._job = job  # keep the thread alive while it runs
+        job.start()
+
     # State --------------------------------------------------------------
     def _update_state(self) -> None:
         has_doc = self.doc is not None
@@ -500,10 +549,11 @@ class MainWindow(QMainWindow):
         self.read_action.setEnabled(has_doc and self.current not in self.pending)
         self.read_all_action.setEnabled(has_doc and any(r is None for r in self.results))
         self.stop_action.setVisible(busy)
-        self.export_action.setEnabled(any(r is not None for r in self.results))
+        self.export_action.setEnabled(has_doc)  # enhancing pages needs no reading
         for action in (self.zoom_in_action, self.zoom_out_action, self.fit_action):
             action.setEnabled(has_doc)
         self.converted_action.setEnabled(has_doc and self.current >= 0 and self.results[self.current] is not None)
+        self.enhanced_action.setEnabled(has_doc)
         if has_doc:
             read = sum(r is not None for r in self.results)
             self.page_label.setText(f"{tr('page_of', self.current + 1, len(self.doc))}  ·  "

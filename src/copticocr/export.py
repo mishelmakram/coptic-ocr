@@ -85,8 +85,6 @@ def to_searchable_pdf(doc: Document, results: list[PageResult | None], path: Pat
 
     Pages that were not recognized are copied without text.
     """
-    font_file = bundled_font()
-    font = pymupdf.Font(fontfile=str(font_file))
     out = pymupdf.open()
     sources: dict[Path, pymupdf.Document] = {}
     try:
@@ -104,30 +102,36 @@ def to_searchable_pdf(doc: Document, results: list[PageResult | None], path: Pat
                     page.insert_image(page.rect, filename=str(source))  # keeps the file's own compression
                 else:
                     page.insert_image(page.rect, pixmap=_pixmap(image))
-            if result is None:
-                continue
-            page.insert_font(fontname="coptic", fontfile=str(font_file))
-            scale = page.rect.width / result.size[0]
-            ink = binarize(np.asarray(doc.page_image(index).convert("L")))
-            for line in result.lines:
-                if line.script != "coptic" or not line.text.strip():
-                    continue
-                height = line.box.height * scale
-                words = line.text.split()
-                # Each word over its printed word, so selecting a word in the scan copies that word.
-                spans = word_spans(ink, line.box, len(words))
-                if spans is None:
-                    words, spans = [line.text], [(line.box.x0, line.box.x1)]
-                for word, (x0, x1) in zip(words, spans):
-                    width = (x1 - x0) * scale
-                    size = min(width / max(font.text_length(word, 1), 1e-3), height)
-                    baseline = pymupdf.Point(x0 * scale, line.box.y1 * scale - 0.15 * height)
-                    page.insert_text(baseline, word, fontname="coptic", fontsize=size, render_mode=3)
+            if result is not None:
+                add_hidden_text(page, result, doc.page_image(index))
         out.save(path, garbage=3, deflate=True)
     finally:
         out.close()
         for src in sources.values():
             src.close()
+
+
+def add_hidden_text(page: pymupdf.Page, result: PageResult, image) -> None:
+    """Lay the recognized Coptic invisibly over its print, word by word where the words can be told apart."""
+    font_file = bundled_font()
+    font = pymupdf.Font(fontfile=str(font_file))
+    page.insert_font(fontname="coptic", fontfile=str(font_file))
+    scale = page.rect.width / result.size[0]
+    ink = binarize(np.asarray(image.convert("L")))
+    for line in result.lines:
+        if line.script != "coptic" or not line.text.strip():
+            continue
+        height = line.box.height * scale
+        words = line.text.split()
+        # Each word over its printed word, so selecting a word in the scan copies that word.
+        spans = word_spans(ink, line.box, len(words))
+        if spans is None:
+            words, spans = [line.text], [(line.box.x0, line.box.x1)]
+        for word, (x0, x1) in zip(words, spans):
+            width = (x1 - x0) * scale
+            size = min(width / max(font.text_length(word, 1), 1e-3), height)
+            baseline = pymupdf.Point(x0 * scale, line.box.y1 * scale - 0.15 * height)
+            page.insert_text(baseline, word, fontname="coptic", fontsize=size, render_mode=3)
 
 
 def page_size(doc: Document, index: int, image) -> tuple[float, float]:

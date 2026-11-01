@@ -13,6 +13,7 @@ from ..legacy import layouts
 from .i18n import tr
 
 FORMATS = [("book_pdf", "fmt_book_pdf", "PDF (*.pdf)"), ("book_docx", "fmt_book_docx", "Word (*.docx)"),
+           ("enhanced", "fmt_enhanced", "PDF (*.pdf)"),
            ("typeset", "fmt_typeset", "PDF (*.pdf)"), ("pdf", "fmt_pdf", "PDF (*.pdf)"),
            ("docx", "fmt_docx", "Word (*.docx)"), ("txt", "fmt_txt", "Text (*.txt)")]
 BOOK = ("book_pdf", "book_docx")
@@ -42,7 +43,7 @@ def coptic_fonts() -> list[str]:
 
 
 class ExportDialog(QDialog):
-    def __init__(self, parent, pages_read: int):
+    def __init__(self, parent, pages_read: int, pages_total: int, start: str = "book_pdf"):
         super().__init__(parent)
         self.setWindowTitle(tr("export_title"))
         self.setMinimumWidth(440)
@@ -53,9 +54,10 @@ class ExportDialog(QDialog):
         group = QGroupBox(tr("format"))
         box = QVBoxLayout(group)
         self.formats = QButtonGroup(self)
-        for i, (_, key, _) in enumerate(FORMATS):
+        for i, (fmt, key, _) in enumerate(FORMATS):
             button = QRadioButton(tr(key))
-            button.setChecked(i == 0)
+            button.setChecked(fmt == start)
+            button.setEnabled(pages_read > 0 or fmt == "enhanced")  # only enhancing needs no reading
             self.formats.addButton(button, i)
             box.addWidget(button)
         hint = QLabel(tr("export_hint"))
@@ -88,6 +90,7 @@ class ExportDialog(QDialog):
 
         group = QGroupBox(tr("pages"))
         box = QVBoxLayout(group)
+        self.pages_read, self.pages_total = pages_read, pages_total
         self.all_pages = QRadioButton(tr("pages_read_only", pages_read))
         self.all_pages.setChecked(True)
         box.addWidget(self.all_pages)
@@ -112,6 +115,8 @@ class ExportDialog(QDialog):
     def _update(self, *_) -> None:
         fmt = FORMATS[self.formats.checkedId()][0]
         self.arrangement_group.setEnabled(fmt in BOOK)
+        self.all_pages.setText(tr("pages_all", self.pages_total) if fmt == "enhanced"
+                               else tr("pages_read_only", self.pages_read))
         self.font_group.setEnabled(fmt in WORD)  # PDFs set the Coptic in the bundled Unicode font
 
     def choice(self) -> ExportChoice:

@@ -10,6 +10,28 @@ from PySide6.QtCore import QThread, Signal
 from ..pipeline import Document, Engine
 
 
+class Job(QThread):
+    """Runs ``work(progress)`` on a thread; ``progress(done, total)`` reports and says whether to go on."""
+
+    progressed = Signal(int, int)
+    done = Signal(bool, str)  # completed (not cancelled), error message
+
+    def __init__(self, work):
+        super().__init__()
+        self.work = work
+        self.cancelled = False
+
+    def run(self) -> None:
+        try:
+            self.done.emit(bool(self.work(self._progress)), "")
+        except Exception as error:  # noqa: BLE001 - shown to the user
+            self.done.emit(False, str(error))
+
+    def _progress(self, done: int, total: int) -> bool:
+        self.progressed.emit(done, total)
+        return not self.cancelled
+
+
 class Reader(QThread):
     """Reads queued pages one at a time with its own copy of the document."""
 
