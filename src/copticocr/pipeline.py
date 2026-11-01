@@ -39,6 +39,7 @@ class TextLine:
     label: Box | None = None  # verse number in the margin
     edited: bool = False
     column: int = 0  # text column it was found in, left to right
+    transliterated: bool = False  # Coptic written in Arabic letters (the middle of three columns)
 
     @property
     def confidence(self) -> float:
@@ -173,6 +174,27 @@ def _join_split_titles(lines: list[TextLine], ink: np.ndarray) -> list[TextLine]
     return out
 
 
+def mark_transliteration(lines: list[TextLine]) -> None:
+    """On a page of three columns, Coptic | Coptic in Arabic letters | Arabic (or mirrored), mark
+    the middle column's lines: an Arabic column that has the Coptic on one side and the Arabic
+    translation on the other."""
+    scripts = {}
+    for column in sorted({line.column for line in lines}):
+        read = [line for line in lines if line.column == column and line.text.strip()]
+        if read:
+            coptic = sum(line.script == "coptic" for line in read)
+            scripts[column] = "coptic" if coptic * 2 > len(read) else "arabic"
+    order = sorted(scripts)
+    for i, column in enumerate(order):
+        if scripts[column] != "arabic":
+            continue
+        before, after = [scripts[c] for c in order[:i]], [scripts[c] for c in order[i + 1:]]
+        if (before[-1:] == ["coptic"] and "arabic" in after) or (after[:1] == ["coptic"] and "arabic" in before):
+            for line in lines:
+                if line.column == column and line.script == "arabic":
+                    line.transliterated = True
+
+
 def _bridged(ink: np.ndarray, a: Box, b: Box) -> bool:
     """Whether ink lies between two boxes side by side, in the rows they share."""
     left, right = (a, b) if a.x0 < b.x0 else (b, a)
@@ -222,6 +244,7 @@ class Engine:
             for line in arabic:
                 if not line.confidences or np.mean(line.confidences) < ARABIC_MIN_CONFIDENCE:
                     line.text, line.confidences = "", []
+        mark_transliteration(lines)
         return PageResult(gray.size, lines)
 
     def _read_lines(self, gray: Image.Image, lines: list[TextLine], recognizer=None) -> None:

@@ -131,6 +131,13 @@ class LineCard(QFrame):
         self.edited.emit(self.index, text)
 
 
+TABS = ("coptic", "transliterated", "arabic", "all")
+
+
+def tab_of(line) -> str:
+    return "transliterated" if line.transliterated else line.script
+
+
 class ProofreadPanel(QWidget):
     line_selected = Signal(int)
     line_edited = Signal(int)
@@ -156,8 +163,8 @@ class ProofreadPanel(QWidget):
         header.addStretch()
         self.tabs = QTabBar()
         self.tabs.setDrawBase(False)
-        for key in ("coptic", "arabic", "all"):
-            self.tabs.addTab(tr(key))
+        for key in TABS:
+            self.tabs.setTabData(self.tabs.addTab(tr(key)), key)
         self.tabs.currentChanged.connect(lambda _: self._rebuild())
         header.addWidget(self.tabs)
         layout.addLayout(header)
@@ -203,10 +210,12 @@ class ProofreadPanel(QWidget):
             self.message.setVisible(self._image is not None)
             return
         self.message.hide()
-        wanted = ("coptic", "arabic", None)[self.tabs.currentIndex()]
+        # The tab for Coptic in Arabic letters only where the page prints it (three columns).
+        self.tabs.setTabVisible(TABS.index("transliterated"), any(l.transliterated for l in self._result.lines))
+        wanted = self.tabs.tabData(self.tabs.currentIndex())
         width = max(200, self.scroll.viewport().width() - 40)
         for i, line in enumerate(self._result.lines):
-            if wanted is not None and line.script != wanted:
+            if wanted != "all" and tab_of(line) != wanted:
                 continue
             card = LineCard(i, line, self._image, width, self.theme, self.coptic_font, self.legacy_keys)
             card.clicked.connect(self._on_click)
@@ -228,8 +237,7 @@ class ProofreadPanel(QWidget):
                 target = card
         if target is None and switch_tab and self._result is not None and 0 <= index < len(self._result.lines):
             # The line is on another tab: switch to the one showing its script.
-            script = self._result.lines[index].script
-            self.tabs.setCurrentIndex(0 if script == "coptic" else 1)
+            self.tabs.setCurrentIndex(TABS.index(tab_of(self._result.lines[index])))
             return
         if target is not None:
             QTimer.singleShot(0, lambda: self.scroll.ensureWidgetVisible(target, 0, 40))

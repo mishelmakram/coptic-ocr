@@ -1,4 +1,5 @@
-"""Re-set read pages as a bilingual book: a table with Coptic on the left, Arabic on the right.
+"""Re-set read pages as a bilingual book: a table with Coptic on the left, Arabic on the right
+(and the Coptic in Arabic letters between them, where the book prints it).
 
 Each row of the table holds a stanza (or a printed line, see ``structure``);
 titles span both columns. The table itself is invisible, unless a rule between
@@ -50,6 +51,7 @@ def _png(image) -> bytes:
 
 
 TYPE_TO_LINE = 0.7  # type size for a printed line of this height (the line's box includes its marks)
+ARABIC_INK = 1.09  # height of a line of Arabic, dots and marks included, in the PDF's font, per point
 
 
 def _line_height(result: PageResult) -> float:
@@ -63,13 +65,30 @@ def _points_per_pixel(result: PageResult, font_size: float = FONT_SIZE) -> float
     return font_size / (TYPE_TO_LINE * _line_height(result))
 
 
-def _column_share(result: PageResult) -> float:
-    """Share of the text width the Coptic column takes on the page."""
-    def width(column: int) -> int:
-        boxes = [l.box for l in result.lines if l.column == column]
-        return max(b.x1 for b in boxes) - min(b.x0 for b in boxes) if boxes else 0
-    left, right = width(0), width(1)
-    return min(0.75, max(0.45, left / (left + right))) if left and right else 0.6
+def _three_columns(result: PageResult) -> bool:
+    return any(line.transliterated for line in result.lines)
+
+
+def _column_shares(result: PageResult) -> list[float]:
+    """Share of the text width each column takes on the page: Coptic, (Coptic in Arabic letters,)
+    Arabic."""
+    def width(lines: list[TextLine]) -> int:
+        return max(l.box.x1 for l in lines) - min(l.box.x0 for l in lines) if lines else 0
+
+    coptic = [l for l in result.lines if l.script == "coptic"]
+    if _three_columns(result):
+        middle = [l for l in result.lines if l.transliterated]
+        arabic = [l for l in result.lines if l.script == "arabic" and not l.transliterated
+                  and l.column > min(m.column for m in middle)]
+        widths = [max(width(part), 1) for part in (coptic, middle, arabic)]
+        shares = [max(0.22, w / sum(widths)) for w in widths]
+        return [share / sum(shares) for share in shares]
+
+    def column_width(column: int) -> int:
+        return width([l for l in result.lines if l.column == column])
+    left, right = column_width(0), column_width(1)
+    share = min(0.75, max(0.45, left / (left + right))) if left and right else 0.6
+    return [share, 1 - share]
 
 
 def _title_box(row: Row):
@@ -104,10 +123,11 @@ def to_docx_book(doc: Document, results: list[PageResult | None], path: Path,
         first = False
         image = clean_page(doc.page_image(index))
         scale = _points_per_pixel(result)
-        share = _column_share(result)
-        widths = (int(usable * share), usable - int(usable * share))
+        shares = _column_shares(result)
+        widths = [int(usable * share) for share in shares]
+        widths[-1] = usable - sum(widths[:-1])
 
-        table = document.add_table(rows=0, cols=2)
+        table = document.add_table(rows=0, cols=len(widths))
         table.alignment = WD_TABLE_ALIGNMENT.CENTER
         table.autofit = False
         _set_borders(table, rule)
@@ -116,7 +136,7 @@ def to_docx_book(doc: Document, results: list[PageResult | None], path: Path,
             for cell, width in zip(cells, widths):
                 cell.width = width
             if row.is_title:
-                cell = cells[0].merge(cells[1])
+                cell = cells[0].merge(cells[-1])
                 paragraph = cell.paragraphs[0]
                 paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 paragraph.paragraph_format.space_after = Pt(6)
@@ -130,18 +150,22 @@ def to_docx_book(doc: Document, results: list[PageResult | None], path: Path,
                 paragraph.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
                 paragraph.paragraph_format.space_after = Pt(8)
                 _coptic_run(paragraph, coptic_text(row.coptic_text, coptic_font), coptic_font)
-            if row.arabic_text:
-                paragraph = cells[1].paragraphs[0]
-                paragraph.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-                paragraph.paragraph_format.right_to_left = True
-                paragraph.paragraph_format.space_after = Pt(8)
-                _arabic_run(paragraph, row.arabic_text, FONT_SIZE)  # Word lays it out; a reading size
-                continue
-            for k, line in enumerate(row.arabic):
-                paragraph = cells[1].paragraphs[0] if k == 0 else cells[1].add_paragraph()
-                paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-                paragraph.paragraph_format.right_to_left = True
-                _add_picture(paragraph, crop(image, line.box), scale, widths[1])
+            parts = [(row.arabic, row.arabic_text, len(cells) - 1)]
+            if len(cells) == 3:
+                parts.append((row.middle, row.middle_text, 1))
+            for lines, text, k in parts:
+                if text:
+                    paragraph = cells[k].paragraphs[0]
+                    paragraph.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+                    paragraph.paragraph_format.right_to_left = True
+                    paragraph.paragraph_format.space_after = Pt(8)
+                    _arabic_run(paragraph, text, FONT_SIZE)  # Word lays it out; a reading size
+                    continue
+                for n, line in enumerate(lines):
+                    paragraph = cells[k].paragraphs[0] if n == 0 else cells[k].add_paragraph()
+                    paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+                    paragraph.paragraph_format.right_to_left = True
+                    _add_picture(paragraph, crop(image, line.box), scale, widths[k])
     if first:
         document.add_paragraph()
     document.save(path)
@@ -254,7 +278,20 @@ def to_pdf_book(doc: Document, results: list[PageResult | None], path: Path, sta
             image = clean_page(original)
             margin = min(width, height) * 0.08
             area = pymupdf.Rect(margin, margin, width - margin, height - margin)
-            divider = area.x0 + area.width * _column_share(result)
+            # Column edges: Coptic, (Coptic in Arabic letters,) Arabic.
+            edges = [area.x0]
+            for share in _column_shares(result):
+                edges.append(edges[-1] + area.width * share)
+            cells = [(edges[k] + (GUTTER if k else 0), edges[k + 1] - (GUTTER if k < len(edges) - 2 else 0))
+                     for k in range(len(edges) - 1)]
+            coptic_cell = cells[0]
+            # The parts in Arabic letters, right to left in their cells: (lines, text, cell).
+            def arabic_parts(row: Row) -> list[tuple[list[TextLine], str | None, tuple[float, float]]]:
+                parts = [(row.arabic, row.arabic_text, cells[-1])]
+                if len(cells) == 3:
+                    parts.append((row.middle, row.middle_text, cells[1]))
+                return parts
+
             # The book's own proportions: pictures at their printed size, type as large as the print.
             scale = width / original.width
             size = TYPE_TO_LINE * _line_height(result) * scale
@@ -269,15 +306,11 @@ def to_pdf_book(doc: Document, results: list[PageResult | None], path: Path, sta
                             f"* {{font-family: arabic; font-size: {points:.1f}pt; line-height: {LINE_SPACING}; "
                             "margin: 0; text-align: justify;} p.title {text-align: center; font-weight: bold;}")
 
-                # As large as the book prints it: each stanza's Arabic in no more lines than it had.
-                cell = area.x1 - divider - GUTTER
-                fitted = size * 0.6
-                for points in np.arange(size * 0.6, size * 1.6, size * 0.05):
-                    style = arabic_style(points)
-                    if all(measure(f'<p dir="rtl">{html.escape(row.arabic_text)}</p>', cell, style, arabic_archive)
-                           <= (len(row.arabic) + 0.6) * points * LINE_SPACING  # the engine adds half a line
-                           for row in rows if row.arabic_text):
-                        fitted = points
+                # As large as the book prints it (from the height of its lines), made smaller only
+                # where a stanza would take more lines than the book gave it.
+                texts = [(text, len(lines), cell) for row in rows if not row.is_title
+                         for lines, text, cell in arabic_parts(row) if text]
+                fitted = arabic_size(result, scale, size, texts, arabic_style, measure, arabic_archive)
                 arabic_css = arabic_style(fitted)
             page, y = out.new_page(width=width, height=height), area.y0
 
@@ -304,39 +337,43 @@ def to_pdf_book(doc: Document, results: list[PageResult | None], path: Path, sta
                     y += h + ROW_GAP / 2
                     continue
                 text = html.escape(row.coptic_text)
-                coptic_width = divider - GUTTER - area.x0
-                text_height = 0.0
-                if text:
-                    text_height = measure(text, coptic_width, css, archive)
-                arabic_body = None
-                if row.arabic_text and arabic_css:
-                    arabic_body = f'<p dir="rtl">{html.escape(row.arabic_text)}</p>'
-                    pictures, sizes = [], []
-                    arabic_height = measure(arabic_body, area.x1 - divider - GUTTER, arabic_css, arabic_archive)
-                else:
-                    pictures = [crop(image, line.box) for line in row.arabic]
-                    sizes = [_fit(p, scale, area.x1 - divider - GUTTER) for p in pictures]
-                    arabic_height = sum(h for _, h in sizes)
-                # Stand the first Arabic line on the first Coptic line's baseline, as the book does:
-                # Arabic fonts leave more room above a line, which would set the Arabic lower.
-                shift = 0.0
-                if text and arabic_body:
-                    shift = baseline(text, coptic_width, css, archive) -                         baseline(arabic_body, area.x1 - divider - GUTTER, arabic_css, arabic_archive)
-                row_height = max(text_height, arabic_height + shift)
+                coptic_width = coptic_cell[1] - coptic_cell[0]
+                text_height = measure(text, coptic_width, css, archive) if text else 0.0
+                coptic_base = None  # measured once, when a part stands on it
+                placed = []  # (cell, body or None, pictures and sizes, height, shift)
+                for lines, part_text, cell in arabic_parts(row):
+                    cell_width = cell[1] - cell[0]
+                    if part_text and arabic_css:
+                        body = f'<p dir="rtl">{html.escape(part_text)}</p>'
+                        part_height = measure(body, cell_width, arabic_css, arabic_archive)
+                        # Stand the first line on the first Coptic line's baseline, as the book does:
+                        # Arabic fonts leave more room above a line, which would set it lower.
+                        shift = 0.0
+                        if text:
+                            if coptic_base is None:
+                                coptic_base = baseline(text, coptic_width, css, archive)
+                            shift = coptic_base - baseline(body, cell_width, arabic_css, arabic_archive)
+                        placed.append((cell, body, [], part_height, shift))
+                    else:
+                        pictures = [crop(image, line.box) for line in lines]
+                        sizes = [_fit(picture, scale, cell_width) for picture in pictures]
+                        placed.append((cell, None, list(zip(pictures, sizes)), sum(h for _, h in sizes), 0.0))
+                row_height = max([text_height] + [h + shift for _, _, _, h, shift in placed])
                 room(row_height)
                 if text:
-                    page.insert_htmlbox(pymupdf.Rect(area.x0, y, divider - GUTTER, y + text_height + 2), text,
+                    page.insert_htmlbox(pymupdf.Rect(coptic_cell[0], y, coptic_cell[1], y + text_height + 2), text,
                                         css=css, archive=archive)
-                if arabic_body:
+                for cell, body, pictures, part_height, shift in placed:
                     top = y + shift
-                    page.insert_htmlbox(pymupdf.Rect(divider + GUTTER, top, area.x1, top + arabic_height + 2),
-                                        arabic_body, css=arabic_css, archive=arabic_archive)
-                top = y
-                for picture, (w, h) in zip(pictures, sizes):
-                    page.insert_image(pymupdf.Rect(area.x1 - w, top, area.x1, top + h), stream=_png(picture))
-                    top += h
+                    if body:
+                        page.insert_htmlbox(pymupdf.Rect(cell[0], top, cell[1], top + part_height + 2), body,
+                                            css=arabic_css, archive=arabic_archive)
+                    for picture, (w, h) in pictures:
+                        page.insert_image(pymupdf.Rect(cell[1] - w, top, cell[1], top + h), stream=_png(picture))
+                        top += h
                 if rule:
-                    page.draw_line((divider, y - ROW_GAP / 2), (divider, y + row_height + ROW_GAP / 2), width=0.8)
+                    for edge in edges[1:-1]:
+                        page.draw_line((edge, y - ROW_GAP / 2), (edge, y + row_height + ROW_GAP / 2), width=0.8)
                 y += row_height + ROW_GAP
         if not out.page_count:
             out.new_page()
@@ -345,6 +382,24 @@ def to_pdf_book(doc: Document, results: list[PageResult | None], path: Path, sta
     finally:
         out.close()
         scratch.close()
+
+
+def arabic_size(result: PageResult, scale: float, coptic_size: float, texts, style, measure, fonts) -> float:
+    """Type size for the Arabic of a page: its printed size, or less where a stanza's text,
+    ``(text, printed lines, cell)``, would not fit in its printed lines."""
+    heights = [l.box.height for l in result.lines if l.script == "arabic" and l.text.strip()]
+    printed = float(np.median(heights)) * scale / ARABIC_INK if heights else coptic_size
+    points = float(np.clip(printed, coptic_size * 0.6, coptic_size * 1.3))
+    while points > coptic_size * 0.6:
+        css = style(points)
+        # A paragraph of one line, with the room the engine leaves around it; each further
+        # line adds a line's height.
+        one = measure('<p dir="rtl">ا</p>', 1000, css, fonts)
+        if all(measure(f'<p dir="rtl">{html.escape(text)}</p>', cell[1] - cell[0], css, fonts)
+               <= one + (count - 0.8) * points * LINE_SPACING for text, count, cell in texts):
+            break
+        points -= coptic_size * 0.05
+    return points
 
 
 def _fit(picture, scale: float, room: float) -> tuple[float, float]:

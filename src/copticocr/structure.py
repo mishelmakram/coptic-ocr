@@ -5,6 +5,10 @@ a row. Rows group into stanzas: a stanza starts where the Coptic is indented, as
 in most psalmodies, and its Coptic and Arabic are kept together, so a table can
 hold one stanza per row and the text can flow inside its cell. A line running
 across both columns before the text, or with no Coptic beside it, is a title.
+
+Some books print three columns: the Coptic, the Coptic in Arabic letters (for those
+who cannot read Coptic letters) and the Arabic. The middle one is kept as a third
+part of each row, and their stanzas are told apart by the space between them.
 """
 
 from __future__ import annotations
@@ -24,6 +28,7 @@ class Row:
     coptic: list[TextLine] = field(default_factory=list)
     arabic: list[TextLine] = field(default_factory=list)
     title: list[TextLine] = field(default_factory=list)  # lines of a title across the page
+    middle: list[TextLine] = field(default_factory=list)  # the Coptic in Arabic letters, if printed
 
     @property
     def is_title(self) -> bool:
@@ -36,9 +41,12 @@ class Row:
     @property
     def arabic_text(self) -> str | None:
         """The Arabic as text, or None if a line of it was not read (it is then shown as a picture)."""
-        if not self.arabic or any(not line.text.strip() for line in self.arabic):
-            return None
-        return " ".join(line.text.strip() for line in self.arabic)
+        return _arabic_text(self.arabic)
+
+    @property
+    def middle_text(self) -> str | None:
+        """The Coptic in Arabic letters as text, or None like :attr:`arabic_text`."""
+        return _arabic_text(self.middle)
 
     @property
     def title_text(self) -> str | None:
@@ -49,9 +57,15 @@ class Row:
 
     @property
     def box(self) -> Box:
-        lines = self.title or self.coptic + self.arabic
+        lines = self.title or self.coptic + self.middle + self.arabic
         return Box(min(l.box.x0 for l in lines), min(l.box.y0 for l in lines),
                    max(l.box.x1 for l in lines), max(l.box.y1 for l in lines))
+
+
+def _arabic_text(lines: list[TextLine]) -> str | None:
+    if not lines or any(not line.text.strip() for line in lines):
+        return None
+    return " ".join(line.text.strip() for line in lines)
 
 
 def join_lines(texts) -> str:
@@ -99,9 +113,13 @@ def line_rows(result: PageResult) -> list[Row]:
     for group in groups:
         group.sort(key=lambda l: l.column)
         coptic = [l for l in group if _is_coptic(l)]
+        middle = [l for l in group if l.transliterated]
+        arabic = [l for l in group if not _is_coptic(l) and not l.transliterated]
         if coptic:
             seen_coptic = True
-            rows.append(Row(coptic=coptic, arabic=[l for l in group if not _is_coptic(l)]))
+            rows.append(Row(coptic=coptic, arabic=arabic, middle=middle))
+        elif middle:
+            rows.append(Row(arabic=arabic, middle=middle))  # the Coptic beside it is shorter
         elif not seen_coptic or len({l.column for l in group}) > 1:
             rows.append(Row(title=group))  # above the text, or across both columns
         else:
@@ -109,8 +127,41 @@ def line_rows(result: PageResult) -> list[Row]:
     return rows
 
 
+def block_rows(result: PageResult) -> list[Row] | None:
+    """Stanzas told apart by the blank space across the page between them (wider than the space
+    between lines), as three-column books print them; None where there is no such space."""
+    lines = sorted((l for l in result.lines if l.text.strip() or l.script == "arabic"), key=lambda l: l.box.y0)
+    if len(lines) < 4:
+        return None
+    height = float(np.median([l.box.height for l in lines]))
+    blocks: list[list[TextLine]] = []
+    bottom = -1e9
+    for line in lines:
+        if not blocks or line.box.y0 - bottom > 1.2 * height:
+            blocks.append([])
+        blocks[-1].append(line)
+        bottom = max(bottom, line.box.y1)
+    if len(blocks) < 2:
+        return None
+    rows = []
+    for block in blocks:
+        block.sort(key=lambda l: (l.column, l.box.y0))
+        coptic = [l for l in block if _is_coptic(l)]
+        middle = [l for l in block if l.transliterated]
+        arabic = [l for l in block if not _is_coptic(l) and not l.transliterated]
+        if coptic or middle:
+            rows.append(Row(coptic=coptic, arabic=arabic, middle=middle))
+        else:
+            rows.append(Row(title=arabic))
+    return rows
+
+
 def stanza_rows(result: PageResult) -> list[Row]:
     """Rows joined into stanzas; one row per line where the page shows no stanzas."""
+    if any(line.transliterated for line in result.lines):
+        blocks = block_rows(result)
+        if blocks:
+            return blocks
     rows = line_rows(result)
     coptic = [line for row in rows for line in row.coptic]
     if len(coptic) < 4:
@@ -127,8 +178,10 @@ def stanza_rows(result: PageResult) -> list[Row]:
     for row in rows:
         previous = stanzas[-1] if stanzas else None
         if row.is_title or previous is None or previous.is_title or starts_stanza(row):
-            stanzas.append(Row(coptic=list(row.coptic), arabic=list(row.arabic), title=list(row.title)))
+            stanzas.append(Row(coptic=list(row.coptic), arabic=list(row.arabic), title=list(row.title),
+                               middle=list(row.middle)))
         else:
             previous.coptic += row.coptic
             previous.arabic += row.arabic
+            previous.middle += row.middle
     return stanzas
