@@ -102,10 +102,34 @@ def split_columns(ink: np.ndarray, lo: float = 0.35, hi: float = 0.75) -> tuple[
     return Box(int(cols[0]), top, int(gap[0]), bottom), Box(int(gap[1]), top, int(cols[-1]) + 1, bottom)
 
 
+def split_further(ink: np.ndarray, box: Box, page_width: int, depth: int = 3) -> list[Box]:
+    """A column cut again wherever a blank strip runs its full height: the third column of a
+    three-column page (Coptic, Coptic in Arabic letters, Arabic). Within one column of text no
+    strip is blank in every line, however the words fall."""
+    region = ink[box.y0:box.y1, box.x0:box.x1]
+    width = region.shape[1]
+    if depth == 0 or width < page_width * 0.15:
+        return [box]
+    profile = region.sum(0)
+    gap = widest_gap(profile.astype(float), int(width * 0.15), int(width * 0.85), 0)
+    if gap is None or gap[1] - gap[0] < page_width * 0.02:
+        return [box]
+    left, right = profile[:gap[0]].sum(), profile[gap[1]:].sum()
+    if min(left, right) < 0.1 * (left + right):  # a stray mark beside the text, not a column
+        return [box]
+    a = Box(box.x0, box.y0, box.x0 + gap[0], box.y1)
+    b = Box(box.x0 + gap[1], box.y0, box.x1, box.y1)
+    return split_further(ink, a, page_width, depth - 1) + split_further(ink, b, page_width, depth - 1)
+
+
 def skip_header(ink: np.ndarray, box: Box, search: float = 0.12) -> Box:
     """Drop the running head: everything down to a horizontal rule near the top, if any."""
     region = ink[box.y0:box.y0 + int(ink.shape[0] * search), box.x0:box.x1]
-    full = np.flatnonzero(region.mean(1) > 0.6)
+    # A rule runs in long strokes (a scanned one is broken here and there, still 40% of the
+    # width or more at a stretch); an Arabic line's baseline covers as much, but is broken
+    # between words and letters into pieces of 15% at most.
+    full = [y for y in np.flatnonzero(region.mean(1) > 0.6)
+            if max((e - s for s, e in runs(region[y])), default=0) > 0.25 * region.shape[1]]
     if not len(full):
         return box
     return Box(box.x0, box.y0 + int(full[-1]) + 1, box.x1, box.y1)
@@ -136,6 +160,12 @@ def find_lines(ink: np.ndarray, box: Box, min_gap: int = 2) -> list[Box]:
     for s, e in merged:
         if e - s < typical * 0.45:
             # Marks above a line belong to the line below; a trailing band joins the previous one.
+            if pending is not None and s - pending[1] >= typical * 0.6:
+                # Far from the marks before (a descender's tail, then the next line's accents):
+                # those were the previous line's.
+                if lines and pending[0] - lines[-1][1] < typical * 0.3:
+                    lines[-1][1] = pending[1]
+                pending = None
             if pending is None:
                 pending = [s, e]
             else:
@@ -221,6 +251,10 @@ def split_margin(ink: np.ndarray, line: Box, text_left: int, slack: int = 15) ->
     s, e = gaps[-1]
     rest = np.flatnonzero(region[:, e:].any(0))
     if not len(rest):
+        return None, line
+    # A verse number is short and set apart; a word space is narrow (the ragged left end of a
+    # right-aligned Arabic line is text, not a label).
+    if e - s < 0.6 * line.height or s > 3 * line.height:
         return None, line
     return (Box(line.x0, line.y0, line.x0 + int(s), line.y1),
             Box(line.x0 + int(e) + int(rest[0]), line.y0, line.x1, line.y1))

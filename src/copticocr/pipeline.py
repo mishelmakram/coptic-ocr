@@ -20,7 +20,7 @@ import pymupdf
 from PIL import Image
 
 from .layout.projection import (Box, binarize, find_lines, remove_rules, skip_header,
-                                split_columns, split_margin, text_left_edge)
+                                split_columns, split_further, split_margin, text_left_edge)
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
 PDF_DPI = 300
@@ -133,6 +133,7 @@ def find_text_lines(gray: np.ndarray) -> list[list[TextLine]]:
         if not len(rows):
             return []
         columns = (Box(int(cols[0]), int(rows[0]), int(cols[-1]) + 1, int(rows[-1]) + 1),)
+    columns = [part for column in columns for part in split_further(clean, column, clean.shape[1])]
     result = []
     for number, column in enumerate(columns):
         column = skip_header(ink, column)  # the rule under a running head is in ``ink`` only
@@ -148,8 +149,11 @@ def find_text_lines(gray: np.ndarray) -> list[list[TextLine]]:
     return result
 
 
-def _join_split_titles(lines: list[TextLine]) -> list[TextLine]:
-    """Rejoin a non-Coptic line that the column split cut in two (a title across both columns)."""
+def _join_split_titles(lines: list[TextLine], ink: np.ndarray) -> list[TextLine]:
+    """Rejoin a non-Coptic line that the column split cut in two (a title across both columns).
+
+    The title's ink runs on through the gap between its halves; side by side lines of two
+    columns (a three-column page) leave that gap blank."""
     out: list[TextLine] = []
     for line in lines:
         partner = next((
@@ -158,6 +162,7 @@ def _join_split_titles(lines: list[TextLine]) -> list[TextLine]:
             and min(other.box.y1, line.box.y1) - max(other.box.y0, line.box.y0) >= 0.5 * min(other.box.height,
                                                                                              line.box.height)
             and max(other.box.x0, line.box.x0) - min(other.box.x1, line.box.x1) < 3 * line.box.height
+            and _bridged(ink, other.box, line.box)
         ), None)
         if partner is None:
             out.append(line)
@@ -166,6 +171,13 @@ def _join_split_titles(lines: list[TextLine]) -> list[TextLine]:
         partner.box = Box(min(a.x0, b.x0), min(a.y0, b.y0), max(a.x1, b.x1), max(a.y1, b.y1))
         partner.column = min(partner.column, line.column)
     return out
+
+
+def _bridged(ink: np.ndarray, a: Box, b: Box) -> bool:
+    """Whether ink lies between two boxes side by side, in the rows they share."""
+    left, right = (a, b) if a.x0 < b.x0 else (b, a)
+    rows = slice(max(a.y0, b.y0), min(a.y1, b.y1))
+    return left.x1 >= right.x0 or bool(ink[rows, left.x1:right.x0].any())
 
 
 def crop(gray: Image.Image, box: Box) -> Image.Image:
@@ -203,7 +215,7 @@ class Engine:
                 if not coptic_column or not line.text or np.mean(line.confidences) < COPTIC_LINE_CONFIDENCE:
                     line.script, line.text, line.confidences = "arabic", "", []
             lines += column
-        lines = _join_split_titles(lines)
+        lines = _join_split_titles(lines, binarize(np.asarray(gray)))
         if self.arabic is not None:
             arabic = [line for line in lines if line.script == "arabic"]
             self._read_lines(gray, arabic, self.arabic)
