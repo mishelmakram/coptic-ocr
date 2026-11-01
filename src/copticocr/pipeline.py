@@ -37,6 +37,7 @@ class TextLine:
     confidences: list[float] = field(default_factory=list)  # one per letter
     label: Box | None = None  # verse number in the margin
     edited: bool = False
+    column: int = 0  # text column it was found in, left to right
 
     @property
     def confidence(self) -> float:
@@ -132,7 +133,7 @@ def find_text_lines(gray: np.ndarray) -> list[list[TextLine]]:
             return []
         columns = (Box(int(cols[0]), int(rows[0]), int(cols[-1]) + 1, int(rows[-1]) + 1),)
     result = []
-    for column in columns:
+    for number, column in enumerate(columns):
         column = skip_header(ink, column)  # the rule under a running head is in ``ink`` only
         boxes = find_lines(clean, column)
         if not boxes:
@@ -141,7 +142,7 @@ def find_text_lines(gray: np.ndarray) -> list[list[TextLine]]:
         lines = []
         for box in boxes:
             label, text = split_margin(clean, box, left)
-            lines.append(TextLine(text, "coptic", label=label))
+            lines.append(TextLine(text, "coptic", label=label, column=number))
         result.append(lines)
     return result
 

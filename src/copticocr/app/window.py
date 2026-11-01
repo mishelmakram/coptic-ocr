@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (QApplication, QFileDialog, QFrame, QLabel, QListW
                                QMainWindow, QMessageBox, QProgressBar, QPushButton, QSizePolicy, QSplitter,
                                QStackedWidget, QToolBar, QVBoxLayout, QWidget)
 
-from .. import export
+from .. import book, export
 from ..pipeline import IMAGE_SUFFIXES, Document, PageResult
 from . import icons, theme as themes
 from .export_dialog import ExportDialog
@@ -468,14 +468,17 @@ class MainWindow(QMainWindow):
         results = list(self.results)
         if choice.current_page_only:
             results = [r if i == self.current else None for i, r in enumerate(results)]
-        suffix = "pdf" if choice.format == "typeset" else choice.format
-        start = Path(self.settings.value("last_dir", str(Path.home()))) / f"{self.doc.name}.{suffix}"
+        start = Path(self.settings.value("last_dir", str(Path.home()))) / f"{self.doc.name}.{choice.suffix}"
         path, _ = QFileDialog.getSaveFileName(self, tr("export"), str(start), choice.file_filter)
         if not path:
             return
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            if choice.format == "typeset":
+            if choice.format == "book_pdf":
+                book.to_pdf_book(self.doc, results, Path(path), choice.stanzas, choice.rule)
+            elif choice.format == "book_docx":
+                book.to_docx_book(self.doc, results, Path(path), choice.coptic_font, choice.stanzas, choice.rule)
+            elif choice.format == "typeset":
                 export.to_typeset_pdf(self.doc, results, Path(path))
             elif choice.format == "pdf":
                 export.to_searchable_pdf(self.doc, results, Path(path))

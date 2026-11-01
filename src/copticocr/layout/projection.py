@@ -44,7 +44,7 @@ def _long_runs(ink: np.ndarray, length: int) -> np.ndarray:
     return (s[hi] - s[lo]) > 0
 
 
-def remove_rules(ink: np.ndarray, vertical: float = 0.15, horizontal: float = 0.25) -> np.ndarray:
+def remove_rules(ink: np.ndarray, vertical: float = 0.08, horizontal: float = 0.25) -> np.ndarray:
     """The ink without frames and column rules: straight runs longer than any glyph."""
     # Scanned rules are a little slanted and broken: measure on a thickened copy.
     thick = _spread(_spread(ink, 1, 1), 0, 1)
@@ -152,8 +152,12 @@ def find_lines(ink: np.ndarray, box: Box, min_gap: int = 2) -> list[Box]:
 
     out = []
     for s, e in lines:
-        cols = np.flatnonzero(region[s:e].any(0))
-        out.append(Box(box.x0 + int(cols[0]), box.y0 + int(s), box.x0 + int(cols[-1]) + 1, box.y0 + int(e)))
+        pieces = runs(region[s:e].any(0))
+        # A faint rule or the page edge leaves a thin sliver far right of the text.
+        while len(pieces) > 1 and pieces[-1][1] - pieces[-1][0] <= max(3, (e - s) * 0.15) \
+                and pieces[-1][0] - pieces[-2][1] >= e - s:
+            pieces.pop()
+        out.append(Box(box.x0 + int(pieces[0][0]), box.y0 + int(s), box.x0 + int(pieces[-1][1]), box.y0 + int(e)))
     return out
 
 
@@ -197,7 +201,7 @@ def text_left_edge(lines: list[Box]) -> int:
     if not candidates:
         return int(starts[0])
     k = max(candidates, key=lambda i: jumps[i])
-    span = starts[int(len(starts) * 0.9)] - starts[0]
+    span = np.median(starts) - starts[0]  # indented titles and paragraph starts do not count
     if jumps[k] < max(20, span * 0.5):
         return int(starts[0])
     return int(starts[k + 1])

@@ -5,15 +5,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from PySide6.QtGui import QFontDatabase
-from PySide6.QtWidgets import (QButtonGroup, QComboBox, QDialog, QGroupBox, QHBoxLayout, QLabel, QPushButton,
-                               QRadioButton, QVBoxLayout)
+from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QDialog, QGroupBox, QHBoxLayout, QLabel,
+                               QPushButton, QRadioButton, QVBoxLayout)
 
 from ..export import UNICODE_FONT
 from ..legacy import layouts
 from .i18n import tr
 
-FORMATS = [("typeset", "fmt_typeset", "PDF (*.pdf)"), ("pdf", "fmt_pdf", "PDF (*.pdf)"),
+FORMATS = [("book_pdf", "fmt_book_pdf", "PDF (*.pdf)"), ("book_docx", "fmt_book_docx", "Word (*.docx)"),
+           ("typeset", "fmt_typeset", "PDF (*.pdf)"), ("pdf", "fmt_pdf", "PDF (*.pdf)"),
            ("docx", "fmt_docx", "Word (*.docx)"), ("txt", "fmt_txt", "Text (*.txt)")]
+BOOK = ("book_pdf", "book_docx")
+WORD = ("book_docx", "docx")
 
 
 @dataclass
@@ -22,6 +25,12 @@ class ExportChoice:
     file_filter: str
     coptic_font: str
     current_page_only: bool
+    stanzas: bool = True
+    rule: bool = False
+
+    @property
+    def suffix(self) -> str:
+        return "docx" if self.format in WORD else "txt" if self.format == "txt" else "pdf"
 
 
 def coptic_fonts() -> list[str]:
@@ -53,6 +62,17 @@ class ExportDialog(QDialog):
         hint.setObjectName("muted")
         hint.setWordWrap(True)
         box.addWidget(hint)
+        layout.addWidget(group)
+
+        group = QGroupBox(tr("arrangement"))
+        box = QVBoxLayout(group)
+        self.by_stanza = QRadioButton(tr("by_stanza"))
+        self.by_stanza.setChecked(True)
+        box.addWidget(self.by_stanza)
+        box.addWidget(QRadioButton(tr("by_line")))
+        self.rule = QCheckBox(tr("column_rule"))
+        box.addWidget(self.rule)
+        self.arrangement_group = group
         layout.addWidget(group)
 
         group = QGroupBox(tr("coptic_font"))
@@ -90,9 +110,11 @@ class ExportDialog(QDialog):
         self._update()
 
     def _update(self, *_) -> None:
-        # The searchable PDF keeps the page image; the font only matters for Word.
-        self.font_group.setEnabled(FORMATS[self.formats.checkedId()][0] == "docx")
+        fmt = FORMATS[self.formats.checkedId()][0]
+        self.arrangement_group.setEnabled(fmt in BOOK)
+        self.font_group.setEnabled(fmt in WORD)  # PDFs set the Coptic in the bundled Unicode font
 
     def choice(self) -> ExportChoice:
         fmt, _, file_filter = FORMATS[self.formats.checkedId()]
-        return ExportChoice(fmt, file_filter, self.font.currentData(), not self.all_pages.isChecked())
+        return ExportChoice(fmt, file_filter, self.font.currentData(), not self.all_pages.isChecked(),
+                            self.by_stanza.isChecked(), self.rule.isChecked())
