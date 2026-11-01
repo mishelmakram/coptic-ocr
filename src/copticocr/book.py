@@ -234,6 +234,17 @@ def to_pdf_book(doc: Document, results: list[PageResult | None], path: Path, sta
         ruler.clean_contents()
         spare, _ = ruler.insert_htmlbox(pymupdf.Rect(0, 0, w, 10000), html_text, css=style, archive=fonts)
         return 10000 - spare
+
+    def baseline(html_text: str, w: float, style: str, fonts: pymupdf.Archive) -> float:
+        """How far below its box's top the first line of the HTML sits (its baseline)."""
+        with pymupdf.open() as fresh:  # the ruler page keeps the text of earlier measurements
+            page = fresh.new_page(width=w + 10, height=10000)
+            page.insert_htmlbox(pymupdf.Rect(0, 0, w, 10000), html_text, css=style, archive=fonts)
+            blocks = page.get_text("dict")["blocks"]
+        for block in blocks:
+            for line in block.get("lines", []):
+                return line["spans"][0]["origin"][1]
+        return 0.0
     try:
         for index, result in enumerate(results):
             if result is None:
@@ -306,13 +317,19 @@ def to_pdf_book(doc: Document, results: list[PageResult | None], path: Path, sta
                     pictures = [crop(image, line.box) for line in row.arabic]
                     sizes = [_fit(p, scale, area.x1 - divider - GUTTER) for p in pictures]
                     arabic_height = sum(h for _, h in sizes)
-                row_height = max(text_height, arabic_height)
+                # Stand the first Arabic line on the first Coptic line's baseline, as the book does:
+                # Arabic fonts leave more room above a line, which would set the Arabic lower.
+                shift = 0.0
+                if text and arabic_body:
+                    shift = baseline(text, coptic_width, css, archive) -                         baseline(arabic_body, area.x1 - divider - GUTTER, arabic_css, arabic_archive)
+                row_height = max(text_height, arabic_height + shift)
                 room(row_height)
                 if text:
                     page.insert_htmlbox(pymupdf.Rect(area.x0, y, divider - GUTTER, y + text_height + 2), text,
                                         css=css, archive=archive)
                 if arabic_body:
-                    page.insert_htmlbox(pymupdf.Rect(divider + GUTTER, y, area.x1, y + arabic_height + 2),
+                    top = y + shift
+                    page.insert_htmlbox(pymupdf.Rect(divider + GUTTER, top, area.x1, top + arabic_height + 2),
                                         arabic_body, css=arabic_css, archive=arabic_archive)
                 top = y
                 for picture, (w, h) in zip(pictures, sizes):
