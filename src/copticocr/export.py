@@ -194,7 +194,8 @@ def _arabic_css(font: Path, size: float, extra: str = "") -> str:
 
 
 def typeset_page(out: pymupdf.Document, image, result: PageResult, size: tuple[float, float]) -> pymupdf.Page:
-    """Add a page where every recognized line is set in type where it was printed.
+    """Add a page where every recognized line is set in type where it was printed, word by word,
+    so each column keeps the book's alignment (Coptic from the left, Arabic from the right).
 
     Whatever was not read (verse numbers, running heads, Arabic when no Arabic
     model is installed) is kept from the scan, as an image.
@@ -213,17 +214,43 @@ def typeset_page(out: pymupdf.Document, image, result: PageResult, size: tuple[f
     page = out.new_page(width=size[0], height=size[1])
     page.insert_image(page.rect, pixmap=_pixmap(background))
     scale = page.rect.width / result.size[0]
+    ink = binarize(np.asarray(image.convert("L")))
+
+    def words_at(line, right_to_left: bool):
+        """(word, x0, x1) in page points: each word where the book printed it, if the words can
+        be told apart; else the whole line at the side its language starts from."""
+        words = line.text.split()
+        spans = word_spans(ink, line.box, len(words))
+        if spans is None:
+            return [(line.text, line.box.x0 * scale, line.box.x1 * scale, None)]
+        # Justified like the book: the outer words against the line's ends, the others centred
+        # in the room their printed word took.
+        sides = ["center"] * len(spans)
+        sides[0], sides[-1] = "left", "right"
+        if len(spans) == 1:
+            sides = ["right" if right_to_left else "left"]
+        placed = [(x0 * scale, x1 * scale, side) for (x0, x1), side in zip(spans, sides)]
+        if right_to_left:
+            placed = placed[::-1]  # the first word of an Arabic line is the rightmost
+        return [(word, x0, x1, side) for word, (x0, x1, side) in zip(words, placed)]
+
     if arabic:
         fonts = pymupdf.Archive(str(arabic_font.parent))
         size = sorted(line.box.height for line in arabic)[len(arabic) // 2] * scale * 0.75
-        css = _arabic_css(arabic_font, size, "text-align: right;")
+        # No text-align: a right-to-left paragraph starts at the right by itself ("right" would
+        # put it at the left in this layout engine).
+        css = _arabic_css(arabic_font, size)
         for line in arabic:
-            b = line.box
             # Arabic fonts have tall line boxes (marks above and below): give the type room, or it shrinks.
-            bottom = b.y1 * scale + size * 0.75
-            rect = pymupdf.Rect(min(b.x0 * scale, b.x1 * scale - size), bottom - size * 2.4, b.x1 * scale, bottom)
-            page.insert_htmlbox(rect, f'<p dir="rtl">{html.escape(line.text)}</p>', css=css, archive=fonts,
-                                scale_low=0)
+            bottom = line.box.y1 * scale + size * 0.75
+            for word, x0, x1, side in words_at(line, right_to_left=True):
+                rect = pymupdf.Rect(min(x0, x1 - size), bottom - size * 2.4, x1, bottom)
+                # A right-to-left paragraph keeps a word's punctuation on its own side. In it this
+                # layout engine swaps left and right, so the sides are named the other way round.
+                css_side = {"left": "right", "right": "left"}.get(side, side)
+                style = f' style="text-align: {css_side}"' if side else ""
+                body = f'<p dir="rtl"{style}>{html.escape(word)}</p>'
+                page.insert_htmlbox(rect, body, css=css, archive=fonts, scale_low=0)
     if not lines:
         return page
     archive = pymupdf.Archive(str(bundled_font().parent))
@@ -233,11 +260,13 @@ def typeset_page(out: pymupdf.Document, image, result: PageResult, size: tuple[f
            f"* {{font-family: coptic; font-size: {size:.2f}px; white-space: nowrap; margin: 0; "
            f"line-height: 1.3;}}")
     for line in lines:
-        b = line.box
         # The box bottom is close to the baseline; hang the type from there.
-        bottom = b.y1 * scale + size * 0.3
-        rect = pymupdf.Rect(b.x0 * scale, bottom - size * 1.3, max(b.x1 * scale, b.x0 * scale + size), bottom)
-        page.insert_htmlbox(rect, html.escape(line.text), css=css, archive=archive, scale_low=0)
+        bottom = line.box.y1 * scale + size * 0.3
+        for word, x0, x1, side in words_at(line, right_to_left=False):
+            # Room below the type, or the paragraph does not fit and the engine shrinks it.
+            rect = pymupdf.Rect(x0, bottom - size * 1.3, max(x1, x0 + size), bottom + size * 0.7)
+            page.insert_htmlbox(rect, f'<p style="text-align: {side or "left"}">{html.escape(word)}</p>', css=css,
+                                archive=archive, scale_low=0)
     return page
 
 

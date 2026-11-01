@@ -27,16 +27,19 @@ class Strength:
     a finer resolution and steady the scan's grain before it is cut into ink and paper."""
 
     work_width: int  # pixels: scans narrower than this are enlarged before tracing
-    smooth: float  # blur of the gray scan before it is cut, in the scan's own pixels (grain, not shape)
-    mend: bool  # fill pinholes inside strokes and close one-pixel gaps
+    smooth: float  # blur of the gray scan before it is cut, in the scan's own pixels (0: none)
+    mend: bool  # fill pinholes inside strokes
     alphamax: float  # Potrace: how readily corners become curves
     tolerance: float  # Potrace: how freely curves are joined
 
 
 LEVELS = {
-    1: Strength(2400, 0.0, False, 1.0, 0.5),   # clean and trace
-    2: Strength(3200, 0.35, False, 1.1, 0.5),  # finer, with the scan's grain steadied
-    3: Strength(4000, 0.6, True, 1.2, 0.5),    # finer still, pinholes and hairline gaps mended
+    # Every level traces the scan's own outline; none blurs or rounds it, since on small scans
+    # the eyes of letters (ⲃ, ⲁ, ϧ) are a pixel or two wide and any smoothing fills them.
+    # Higher levels only trace finer, and the top one fills specks inside strokes.
+    1: Strength(2400, 0.0, False, 1.0, 0.4),
+    2: Strength(3600, 0.0, False, 1.0, 0.4),
+    3: Strength(4800, 0.0, True, 1.0, 0.4),
 }
 
 
@@ -46,7 +49,7 @@ def clean(image: Image.Image, level: int = 1) -> tuple[np.ndarray, float]:
 
     strength = LEVELS[level]
     gray = image.convert("L")
-    factor = min(4.0, max(1.0, strength.work_width / gray.width))
+    factor = min(6.0, max(1.0, strength.work_width / gray.width))
     if factor > 1.05:
         gray = gray.resize((round(gray.width * factor), round(gray.height * factor)), Image.BICUBIC)
     else:
@@ -83,29 +86,34 @@ def clean(image: Image.Image, level: int = 1) -> tuple[np.ndarray, float]:
     ink[np.isin(labels, np.flatnonzero(drop) + 1)] = False
 
     if strength.mend:
-        # Pinholes (white specks inside strokes) are filled and one-pixel gaps closed; the eyes
-        # of letters (ϧ, ⲑ, ⲁ), larger than any pinhole, are kept exactly as they were.
+        # Pinholes (white specks inside strokes) are filled; the eyes of letters (ϧ, ⲑ, ⲁ),
+        # larger than any pinhole, are kept exactly as they were.
         holes, _ = ndimage.label(~ink)
         background = np.unique(np.concatenate([holes[0], holes[-1], holes[:, 0], holes[:, -1]]))
         enclosed = (holes > 0) & ~np.isin(holes, background)
         small = np.bincount(holes.ravel()) < PINHOLE * letter ** 2
         eyes = enclosed & ~small[holes]
         ink |= enclosed & small[holes]
-        ink = ndimage.binary_closing(ink, structure=np.ones((3, 3)))
         ink &= ~eyes
     return ink, factor
 
 
 def _otsu(values: np.ndarray) -> float:
-    """The level splitting ``values`` (paper near 1, ink below) into two classes best."""
-    hist, edges = np.histogram(np.clip(values, 0, 1.2), bins=240)
+    """The level splitting ``values`` (paper near 1, ink below) into two classes best.
+
+    Kept between 0.3 and 0.9: paper is near 1 once evened out, so a cut outside that
+    range is a failed estimate (it would turn the whole page into ink, or lose faint print).
+    """
+    hist, edges = np.histogram(values, bins=256, range=(0.0, 1.2))
+    hist = hist.astype(np.float64)
     centers = (edges[:-1] + edges[1:]) / 2
     weight = np.cumsum(hist)
     mean = np.cumsum(hist * centers)
     total, total_mean = weight[-1], mean[-1]
     with np.errstate(divide="ignore", invalid="ignore"):
         between = (total_mean * weight / total - mean) ** 2 / (weight * (total - weight))
-    return float(centers[np.nanargmax(between)])
+    between[~np.isfinite(between)] = -1
+    return float(np.clip(centers[int(np.argmax(between))], 0.3, 0.9))
 
 
 def preview(image: Image.Image, level: int = 1) -> Image.Image:
