@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PIL import Image
-from PySide6.QtCore import QRectF, Qt, Signal
+from PySide6.QtCore import QEasingCurve, QRectF, Qt, QVariantAnimation, Signal
 from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QGraphicsPixmapItem, QGraphicsRectItem, QGraphicsScene, QGraphicsView
 
@@ -53,12 +53,23 @@ class PageView(QGraphicsView):
         self.scene().clear()
         self._page, self._lines, self._result, self._selected = None, [], None, -1
 
-    def show_page(self, image: Image.Image, result: PageResult | None, quiet: bool = False) -> None:
+    def show_page(self, image: Image.Image, result: PageResult | None, quiet: bool = False,
+                  fade: bool = False) -> None:
         selected = self._selected
         self.quiet = quiet
         self.clear()
         self._page = self.scene().addPixmap(to_pixmap(image))
         self._page.setTransformationMode(Qt.SmoothTransformation)
+        if fade:
+            self._page.setOpacity(0.0)
+            appear = QVariantAnimation(self)
+            appear.setDuration(220)
+            appear.setStartValue(0.0)
+            appear.setEndValue(1.0)
+            appear.setEasingCurve(QEasingCurve.OutCubic)
+            page = self._page
+            appear.valueChanged.connect(lambda value: page.setOpacity(value) if page.scene() else None)
+            appear.start(QVariantAnimation.DeleteWhenStopped)
         self.scene().setSceneRect(QRectF(self._page.pixmap().rect()).adjusted(-40, -40, 40, 40))
         self.set_result(result)
         if 0 <= selected < len(self._lines):

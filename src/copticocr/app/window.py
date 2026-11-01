@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, QSize, Qt, QTimer
-from PySide6.QtGui import QAction, QActionGroup, QFont, QIcon, QKeySequence, QPixmap
+from PySide6.QtGui import QAction, QActionGroup, QColor, QFont, QIcon, QKeySequence, QPixmap
 from PySide6.QtWidgets import (QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QListWidget,
                                QListWidgetItem, QMainWindow, QMenu, QMessageBox, QProgressBar, QProgressDialog,
                                QPushButton, QSplitter, QStackedWidget, QToolButton, QVBoxLayout, QWidget)
@@ -122,12 +122,18 @@ class MainWindow(QMainWindow):
         menu.addAction(self.keys_action)
         levels = menu.addMenu(tr("enhance_level"))
         group = QActionGroup(self)
+        self.level_actions = []
         for number in (1, 2, 3):
             action = levels.addAction(tr(f"level_{number}"))
             action.setCheckable(True)
             action.setChecked(number == self.enhance_level)
             action.triggered.connect(lambda _=False, n=number: self._set_level(n))
             group.addAction(action)
+            self.level_actions.append(action)
+        self.guide_action = menu.addAction(tr("show_guide"))
+        self.guide_action.setCheckable(True)
+        self.guide_action.setChecked(self.settings.value("guide", True, bool))
+        self.guide_action.toggled.connect(self._set_guide)
         menu.addSeparator()
         menu.addAction(tr("choose_model"), self.choose_model)
         self.cpu_action = menu.addAction(tr("use_cpu"))
@@ -238,7 +244,13 @@ class MainWindow(QMainWindow):
         self.stack.setObjectName("stack")
         self.stack.addWidget(self._welcome())
         self.stack.addWidget(self.view)
-        self.floating = chrome.FloatingBar()
+        self.floating = chrome.FloatingBar(tr("enhance_short"), tr("enhance_more"))
+        self.floating.level.level_chosen.connect(self._set_level)
+        self.floating.level.more.connect(self._enhance_more)
+        self.toast = chrome.Toast()
+        self.coach = chrome.CoachCard()
+        self.coach.close.clicked.connect(lambda: self.guide_action.setChecked(False))
+        self._reviewed = self._exported = False
         self.floating.previous.clicked.connect(lambda: self.go(self.current - 1))
         self.floating.next.clicked.connect(lambda: self.go(self.current + 1))
         self.floating.zoom_in.clicked.connect(self.zoom_in_action.trigger)
@@ -249,7 +261,7 @@ class MainWindow(QMainWindow):
                             (self.floating.fit, "fit_width")):
             button.setToolTip(tr(key))
         self.floating.hide()
-        canvas = chrome.Canvas(self.stack, self.floating)
+        canvas = chrome.Canvas(self.stack, self.floating, self.toast, self.coach)
 
         self.panel = ProofreadPanel(self.theme, self.coptic_font)
         self.panel.set_legacy_keys(self.keys_action.isChecked())
@@ -288,9 +300,10 @@ class MainWindow(QMainWindow):
         return footer
 
     def notify(self, text: str, ms: int = 8000) -> None:
-        """A message in the footer that clears itself."""
+        """A message over the page (fading in and out) that also stays a while in the footer."""
         self.footer_text.setText(text)
         self._footer_timer.start(ms)
+        self.toast.show_message(text, min(ms, 4500))
 
     def _build_frame(self) -> None:
         root = QWidget()
@@ -367,6 +380,10 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(icons.app_icon(t.accent, self.coptic_family))
         self.logo.setPixmap(icons.app_icon(t.accent, self.coptic_family).pixmap(34, 34))
         self.welcome_icon.setPixmap(icons.app_icon(t.accent, self.coptic_family).pixmap(96, 96))
+        self.view_switch.set_colors(t.sunken, t.surface, t.border)
+        self.toast.spinner.color = QColor(t.surface)
+        self.coach.close.setIcon(icons.icon("close", t.muted, 16))
+        self.floating.level.set_level(self.enhance_level)
         self.view.set_theme(t)
         self.panel.set_theme(t)
 
@@ -412,10 +429,11 @@ class MainWindow(QMainWindow):
             item.setTextAlignment(Qt.AlignHCenter)
             self.pages.addItem(item)
         self.stack.setCurrentWidget(self.view)
-        self.pages_panel.show()
+        chrome.slide_in(self.pages_panel, THUMB.width() + 72)
+        self._reviewed = self._exported = False
         self.pages_header.set_count(len(self.doc))
-        self.panel.show()
-        self.floating.show()
+        chrome.slide_in(self.panel, 500)
+        chrome.fade(self.floating, True)
         name = self.doc.name + (f"  +{len(self.doc.paths) - 1}" if len(self.doc.paths) > 1 else "")
         self.doc_name.setText(self.doc_name.fontMetrics().elidedText(name, Qt.ElideMiddle, 300))
         self.doc_name.setToolTip(str(self.doc.paths[0]))
@@ -469,20 +487,58 @@ class MainWindow(QMainWindow):
             return
         result = self.results[self.current]
         converted = self.converted_action.isChecked() and result is not None
+        self.floating.show_level(self.enhanced_action.isChecked())
         if self.enhanced_action.isChecked():
             key = (self.current, self.enhance_level)
-            if key not in self._enhanced:
-                QApplication.setOverrideCursor(Qt.WaitCursor)
-                self._enhanced = {key: enhance.preview(self.page_image, self.enhance_level)}  # keep one page
-                QApplication.restoreOverrideCursor()
-            self.view.show_page(self._enhanced[key], result, quiet=True)
+            if key in self._enhanced:
+                self.view.show_page(self._enhanced[key], result, quiet=True, fade=True)
+            else:
+                self._enhance_in_background(key)
             return
         image = typeset_preview(self.page_image, result) if converted else self.page_image
-        self.view.show_page(image, result, quiet=converted)
+        self.view.show_page(image, result, quiet=converted, fade=True)
+
+    def _enhance_in_background(self, key: tuple[int, int]) -> None:
+        """Clean the page on a thread; the view changes when it is ready (if still wanted)."""
+        if getattr(self, "_preview_job", None) is not None and self._preview_job.isRunning():
+            self._preview_wanted = key  # computed after the running one
+            return
+        page, level = key
+        image = self.page_image
+        self.toast.show_message(tr("enhancing_page", level), 0, busy=True)
+        holder = {}
+        job = Job(lambda _report: holder.setdefault("image", enhance.preview(image, level)) is not None)
+
+        def ready(_completed: bool, error: str) -> None:
+            self._preview_job = None
+            if error:
+                self.toast.done(tr("save_failed", error))
+                return
+            self._enhanced = {key: holder["image"]}  # keep one page
+            self.toast.done(tr("level_done", level, tr(f"level_desc_{level}")))
+            wanted = getattr(self, "_preview_wanted", None)
+            self._preview_wanted = None
+            if wanted is not None and wanted != key:
+                self._enhance_in_background(wanted)
+            elif self.enhanced_action.isChecked() and (self.current, self.enhance_level) == key:
+                self.view.show_page(holder["image"], self.results[self.current], quiet=True, fade=True)
+
+        job.done.connect(ready)
+        self._preview_job = job
+        job.start()
+
+    def _enhance_more(self) -> None:
+        if self.enhance_level >= 3:
+            self.notify(tr("max_level"), 2500)
+            return
+        self._set_level(self.enhance_level + 1)
 
     def _set_level(self, level: int) -> None:
         self.enhance_level = level
         self.settings.setValue("enhance_level", level)
+        self.floating.level.set_level(level)
+        for number, action in enumerate(self.level_actions, 1):
+            action.setChecked(number == level)
         if self.enhanced_action.isChecked():
             self._show_current()
 
@@ -496,7 +552,12 @@ class MainWindow(QMainWindow):
         self._show_current()
 
     def _view_chosen(self, index: int) -> None:
-        """The header's view switch: the scan, the page with its text set in type, or the cleaned page."""
+        """The header's view switch: the scan, the page with its text set in type, or the cleaned page.
+
+        Choosing Enhance again while it is on raises the level, as one would expect of the button."""
+        if index == 2 and self.enhanced_action.isChecked():
+            self._enhance_more()
+            return
         self.converted_action.setChecked(index == 1)
         self.enhanced_action.setChecked(index == 2)
         self._show_current()
@@ -640,6 +701,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, tr("app_name"), tr("save_failed", error))
             return
         QApplication.restoreOverrideCursor()
+        self._exported = True
         self.notify(tr("saved", path), 8000)
 
     def _enhance_to(self, path: Path, pages: list[int]) -> None:
@@ -668,6 +730,7 @@ class MainWindow(QMainWindow):
             if error:
                 QMessageBox.critical(self, tr("app_name"), tr("save_failed", error))
             elif completed:
+                self._exported = True
                 self.notify(tr("saved", path), 8000)
 
         job.progressed.connect(advanced)
@@ -709,11 +772,32 @@ class MainWindow(QMainWindow):
             self.busy_text.setText(tr("reading", done + 1, self.batch_total))
         self.busy.setVisible(busy)
         self.line.setVisible(busy)
+        self._update_guide()
         if self.checkpoint is None:
             self.model_chip.setText(tr("no_model"))
         elif self.reader is None:
             self.model_chip.setText(tr("model_info", self.checkpoint.parent.name,
                                        "CPU" if self.cpu_action.isChecked() else "auto"))
+
+    def _update_guide(self) -> None:
+        """The guide card names the next step for the page on screen."""
+        if not self.guide_action.isChecked() or self.doc is None or self.pending or self._exported:
+            self.coach.dismiss()
+            return
+        if self.results[self.current] is None:
+            self.coach.show_step("read", tr("step", 1, 3), tr("coach_read"), tr("read_page"), self.read_current)
+        elif not self._reviewed:
+            self.coach.show_step("review", tr("step", 2, 3), tr("coach_review"), tr("got_it"), self._reviewed_now)
+        else:
+            self.coach.show_step("export", tr("step", 3, 3), tr("coach_export"), tr("export"), self.export)
+
+    def _reviewed_now(self) -> None:
+        self._reviewed = True
+        self._update_guide()
+
+    def _set_guide(self, on: bool) -> None:
+        self.settings.setValue("guide", on)
+        self._update_guide()
 
     def closeEvent(self, event) -> None:
         if self.pending and QMessageBox.question(self, tr("app_name"), tr("unsaved_quit")) != QMessageBox.Yes:

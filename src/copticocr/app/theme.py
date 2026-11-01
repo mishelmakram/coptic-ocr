@@ -102,11 +102,11 @@ def style_sheet(t: Theme) -> str:
     QToolButton#stopButton {{ border: none; border-radius: 11px; padding: 3px; }}
     QToolButton#stopButton:hover {{ background: {t.surface}; }}
 
-    QFrame#segmented {{ background: {t.sunken}; border-radius: 11px; }}
+    QFrame#segmented {{ background: transparent; }}
     QToolButton#segment {{ border: none; border-radius: 8px; padding: 6px 14px; color: {t.muted};
                            font-weight: 600; }}
     QToolButton#segment:hover {{ color: {t.text}; }}
-    QToolButton#segment:checked {{ background: {t.surface}; color: {t.text}; border: 1px solid {t.border}; }}
+    QToolButton#segment:checked {{ background: transparent; color: {t.text}; }}
     QToolButton#segment:disabled {{ color: {t.border}; }}
 
     QMenu {{ background: {t.surface}; border: 1px solid {t.border}; border-radius: 10px; padding: 6px; }}
@@ -139,6 +139,22 @@ def style_sheet(t: Theme) -> str:
     QLabel#pillLabel {{ font-weight: 600; color: {t.text}; padding: 0 4px; }}
     QFrame#pillDivider {{ background: {t.border}; }}
 
+    QFrame#toast {{ background: {t.text}; border-radius: 12px; }}
+    QLabel#toastText {{ color: {t.surface}; font-weight: 600; }}
+    QFrame#coach {{ background: {t.surface}; border: 1px solid {t.border}; border-radius: 14px; }}
+    QLabel#coachText {{ color: {t.text}; }}
+    QLabel#stepChip {{ background: {t.accent_soft}; color: {t.accent}; border-radius: 12px; padding: 4px 10px;
+                       font-weight: 700; min-width: 38px; }}
+    QPushButton#primarySmall {{ background: {t.accent}; color: {t.on_accent}; border: none; border-radius: 9px;
+                                padding: 6px 14px; }}
+    QPushButton#primarySmall:hover {{ background: {t.accent_hover}; }}
+    QToolButton#dot {{ border: 2px solid {t.border}; border-radius: 9px; background: {t.surface}; }}
+    QToolButton#dot:hover {{ border-color: {t.accent}; }}
+    QToolButton#dot:checked {{ border-color: {t.accent}; background: {t.accent}; }}
+    QPushButton#pillAction {{ background: {t.accent_soft}; color: {t.accent}; border: none; border-radius: 14px;
+                              padding: 5px 14px; }}
+    QPushButton#pillAction:hover {{ background: {t.accent}; color: {t.on_accent}; }}
+    QPushButton#pillAction:disabled {{ background: {t.sunken}; color: {t.muted}; }}
     QLabel#welcomeTitle {{ font-size: 20pt; font-weight: 700; }}
     QLabel#welcomeBody {{ color: {t.muted}; font-size: 11pt; }}
     QFrame#dropZone {{ border: 2px dashed {t.border}; border-radius: 22px; background: {t.surface}; }}
