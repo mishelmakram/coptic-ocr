@@ -6,8 +6,7 @@ from __future__ import annotations
 import torch
 from torch import nn
 
-HEIGHT = 48  # input line height in pixels
-STRIDE = 4   # image columns per output frame
+from .lines import HEIGHT, STRIDE  # noqa: F401 - imported from here by training and reading
 
 
 def _conv(cin: int, cout: int, kernel=3, padding=1) -> list[nn.Module]:

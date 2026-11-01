@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QDialog, QGroupBox, QHBoxLayout, QLabel,
-                               QPushButton, QRadioButton, QVBoxLayout)
+                               QLayout, QPushButton, QRadioButton, QVBoxLayout)
 
 from ..export import UNICODE_FONT
 from ..legacy import layouts
@@ -52,6 +52,7 @@ class ExportDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 18)
         layout.setSpacing(12)
+        layout.setSizeConstraint(QLayout.SetFixedSize)  # follows the sections shown, wrapped text included
 
         group = QGroupBox(tr("format"))
         box = QVBoxLayout(group)
@@ -130,13 +131,13 @@ class ExportDialog(QDialog):
         self._update()
 
     def _update(self, *_) -> None:
+        # Only what applies to this format is shown, which also keeps the dialog within a laptop's screen.
         fmt = FORMATS[self.formats.checkedId()][0]
-        self.arrangement_group.setEnabled(fmt in BOOK)
+        self.arrangement_group.setVisible(fmt in BOOK)
         self.level_group.setVisible(fmt == "enhanced")
-        self.adjustSize()
+        self.font_group.setVisible(fmt in WORD)  # PDFs set the Coptic in the bundled Unicode font
         self.all_pages.setText(tr("pages_all", self.pages_total) if fmt == "enhanced"
                                else tr("pages_read_only", self.pages_read))
-        self.font_group.setEnabled(fmt in WORD)  # PDFs set the Coptic in the bundled Unicode font
 
     def choice(self) -> ExportChoice:
         fmt, _, file_filter = FORMATS[self.formats.checkedId()]

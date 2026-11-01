@@ -14,14 +14,28 @@ from ..export import bundled_font
 from .i18n import language, set_language
 
 
+def use_portable_settings() -> None:
+    """The portable copy (a ``portable`` file beside the program) keeps its settings in a folder
+    beside it, so it runs from a USB stick and leaves nothing in the registry."""
+    home = Path(sys.executable).parent
+    if getattr(sys, "frozen", False) and (home / "portable").exists():
+        QSettings.setDefaultFormat(QSettings.IniFormat)
+        QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(home / "settings"))
+
+
 def main(argv: list[str] | None = None) -> int:
     multiprocessing.freeze_support()  # enhancing uses worker processes, also in a frozen build
     argv = sys.argv if argv is None else argv
+    if sys.platform == "win32":  # the taskbar shows the program's own icon, not Python's
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("CopticOCR.CopticOCR")
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(argv)
     app.setOrganizationName("CopticOCR")
     app.setApplicationName("Coptic OCR")
     app.setStyle("Fusion")  # the style sheet assumes Fusion's metrics
+    use_portable_settings()
 
     set_language(QSettings().value("language", "ar"))
     if language() == "ar":

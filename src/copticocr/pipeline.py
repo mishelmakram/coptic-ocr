@@ -178,10 +178,10 @@ class Engine:
 
     def __init__(self, checkpoint: str | Path, device: str | None = None, batch: int = 32,
                  arabic_checkpoint: str | Path | None = None):
-        from .recog.infer import Recognizer  # torch is slow to import; only load it when reading
+        from .recog.reader import open_recognizer  # slow to import; only load it when reading
 
-        self.recognizer = Recognizer(checkpoint, device)
-        self.arabic = Recognizer(arabic_checkpoint, device) if arabic_checkpoint else None
+        self.recognizer = open_recognizer(checkpoint, device)
+        self.arabic = open_recognizer(arabic_checkpoint, device) if arabic_checkpoint else None
         self.batch = batch
 
     @property

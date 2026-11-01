@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QByteArray, QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPixmap
+from PySide6.QtGui import QColor, QFont, QIcon, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 
 # 24x24 outlines, 2px strokes.
@@ -50,22 +50,43 @@ def icon(name: str, color: str, size: int = 20) -> QIcon:
     return result
 
 
+def paint_tile(size: int, accent: str, coptic_family: str) -> QPixmap:
+    """The program's icon at one size: a burgundy tile, lit from above, with the Coptic letter
+    ti (Ϯ), shaped like a cross; from 48 pixels up a thin gold rim, as on a church book."""
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing)
+    margin = 0 if size < 48 else size * 0.04  # room for the rim's antialiasing
+    box = QRectF(margin, margin, size - 2 * margin, size - 2 * margin)
+    tile = QPainterPath()
+    tile.addRoundedRect(box, box.width() * 0.22, box.width() * 0.22)
+    base = QColor(accent)
+    light = QLinearGradient(0, box.top(), 0, box.bottom())
+    light.setColorAt(0, base.lighter(128))
+    light.setColorAt(1, base.darker(118))
+    painter.fillPath(tile, light)
+    if size >= 48:
+        rim = QPainterPath()
+        inset = box.width() * 0.07
+        inner = box.adjusted(inset, inset, -inset, -inset)
+        rim.addRoundedRect(inner, inner.width() * 0.17, inner.width() * 0.17)
+        painter.setPen(QPen(QColor(226, 190, 120, 200), max(1.0, size / 96)))
+        painter.drawPath(rim)
+    font = QFont(coptic_family)
+    font.setPixelSize(int(size * 0.62))
+    painter.setFont(font)
+    painter.setPen(QColor("#FFFFFF"))
+    painter.drawText(QRectF(0, -size * 0.04, size, size), Qt.AlignCenter, "Ϯ")
+    painter.end()
+    return pixmap
+
+
+ICON_SIZES = (16, 20, 24, 32, 40, 48, 64, 128, 256)
+
+
 def app_icon(accent: str, coptic_family: str) -> QIcon:
-    """A burgundy tile with the Coptic letter ti (Ϯ), shaped like a cross."""
     result = QIcon()
-    for size in (16, 24, 32, 48, 64, 128, 256):
-        pixmap = QPixmap(size, size)
-        pixmap.fill(Qt.transparent)
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.Antialiasing)
-        tile = QPainterPath()
-        tile.addRoundedRect(QRectF(0, 0, size, size), size * 0.22, size * 0.22)
-        painter.fillPath(tile, QColor(accent))
-        font = QFont(coptic_family)
-        font.setPixelSize(int(size * 0.62))
-        painter.setFont(font)
-        painter.setPen(QColor("#FFFFFF"))
-        painter.drawText(QRectF(0, -size * 0.04, size, size), Qt.AlignCenter, "Ϯ")
-        painter.end()
-        result.addPixmap(pixmap)
+    for size in ICON_SIZES:
+        result.addPixmap(paint_tile(size, accent, coptic_family))
     return result

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import time
 from pathlib import Path
@@ -36,14 +37,21 @@ def typeset_preview(image, result: PageResult):
 
 
 def default_checkpoint(script: str = "coptic") -> Path | None:
-    """$COPTICOCR_MODEL (or $COPTICOCR_ARABIC_MODEL), else the newest ``models/<script>-*/best.pt``."""
+    """$COPTICOCR_MODEL (or $COPTICOCR_ARABIC_MODEL), else the newest ``models/<script>-*``: its
+    training checkpoint where PyTorch is installed (it reads on an NVIDIA card), else its export
+    for ONNX Runtime (the installed program)."""
     variable = "COPTICOCR_MODEL" if script == "coptic" else "COPTICOCR_ARABIC_MODEL"
     if os.environ.get(variable):
         return Path(os.environ[variable])
+    names = ("best.pt", "model.onnx") if importlib.util.find_spec("torch") else ("model.onnx",)
     for root in Path(__file__).resolve().parents:
-        found = sorted((root / "models").glob(f"{script}-*/best.pt"), key=lambda p: p.stat().st_mtime)
-        if found:
-            return found[-1]
+        # Newest by when it was trained (an old model exported later is still old).
+        folders = sorted((root / "models").glob(f"{script}-*"), reverse=True, key=lambda p: next(
+            (f.stat().st_mtime for f in (p / "best.pt", p / "model.onnx") if f.exists()), 0))
+        for folder in folders:
+            for name in names:
+                if (folder / name).exists():
+                    return folder / name
     return None
 
 
@@ -608,7 +616,8 @@ class MainWindow(QMainWindow):
         return True
 
     def _reader_ready(self, device: str) -> None:
-        self.device = "GPU" if device.startswith("cuda") else "CPU"
+        self.device = "CPU" if device == "cpu" else "GPU"
+        self.device_kind = device
         self.model_chip.setText(tr("model_ready"))
         self.model_chip.setToolTip(tr("model_info", self.checkpoint.parent.name, self.device))
         self._show_machine()
@@ -620,7 +629,7 @@ class MainWindow(QMainWindow):
         device = getattr(self, "device", None)
         self.machine_chip.setText(tr("machine", cores, f"{free:.1f}") + (" · GPU" if device == "GPU" else ""))
         gpu = tr("machine_gpu_none")
-        if device == "GPU":
+        if device == "GPU" and self.device_kind.startswith("cuda"):
             import torch  # already loaded by the reader
             try:
                 room, _total = torch.cuda.mem_get_info()

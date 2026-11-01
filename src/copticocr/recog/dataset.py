@@ -5,30 +5,17 @@ from __future__ import annotations
 import random
 from pathlib import Path
 
-import numpy as np
 import torch
 from PIL import Image
 from torch.utils.data import Dataset, Sampler
 
 from .charset import Charset
-from .model import HEIGHT
-
-MAX_WIDTH = 1600
-PAD_TO = 64
+from .lines import HEIGHT, MAX_WIDTH, PAD_TO, line_pixels  # noqa: F401
 
 
 def load_image(img: Image.Image, mirror: bool = False) -> torch.Tensor:
-    """Grayscale line -> (1, HEIGHT, W) float tensor, ink = 1, paper = 0.
-
-    ``mirror`` flips a right-to-left line so it is read from its first letter.
-    """
-    img = img.convert("L")
-    if mirror:
-        img = img.transpose(Image.FLIP_LEFT_RIGHT)
-    width = min(MAX_WIDTH, max(HEIGHT, round(img.width * HEIGHT / img.height)))
-    img = img.resize((width, HEIGHT), Image.BILINEAR)
-    pixels = 1.0 - np.asarray(img, dtype=np.float32) / 255.0
-    return torch.from_numpy(pixels).unsqueeze(0)
+    """Grayscale line -> (1, HEIGHT, W) float tensor, ink = 1, paper = 0 (see :func:`line_pixels`)."""
+    return torch.from_numpy(line_pixels(img, mirror)).unsqueeze(0)
 
 
 def read_labels(root: Path) -> list[tuple[Path, str]]:
