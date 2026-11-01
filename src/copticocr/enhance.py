@@ -8,23 +8,44 @@ the page stays sharp at any zoom and the file is small.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
 import numpy as np
 from PIL import Image, ImageFilter
 
-WORK_WIDTH = 2400  # pixels: small scans are enlarged to about this before tracing
 SPECK = 0.004  # of the letter height squared: ink shapes smaller than this are specks
 EDGE = 0.03  # of the page size: the margin where thin slivers are taken for the paper's edge
+BATCH = 50  # pages held in memory before they are appended to the file
 
 
-def clean(image: Image.Image) -> tuple[np.ndarray, float]:
+@dataclass(frozen=True)
+class Strength:
+    """How hard a page is worked on. Every level keeps the scan's letter shapes; higher levels
+    work at a finer resolution and even out the outline more."""
+
+    work_width: int  # pixels: scans narrower than this are enlarged before tracing
+    smooth: float  # of the letter height: blur of the ink before it is cut again, rounding jagged edges
+    repair: float  # of the letter height: hairline breaks in strokes closed, pinholes filled
+    alphamax: float  # Potrace: how readily corners become curves
+    tolerance: float  # Potrace: how freely curves are joined
+
+
+LEVELS = {
+    1: Strength(2400, 0.0, 0.0, 1.0, 0.5),     # clean and trace
+    2: Strength(3000, 0.03, 0.0, 1.1, 0.5),    # and smooth the edges
+    3: Strength(3600, 0.05, 0.015, 1.2, 0.6),  # and mend broken strokes: like freshly printed
+}
+
+
+def clean(image: Image.Image, level: int = 1) -> tuple[np.ndarray, float]:
     """(ink mask, enlargement) of a page: True where there is ink, specks removed."""
     from scipy import ndimage
 
+    strength = LEVELS[level]
     gray = image.convert("L")
-    factor = min(4.0, max(1.0, WORK_WIDTH / gray.width))
+    factor = min(4.0, max(1.0, strength.work_width / gray.width))
     if factor > 1.05:
         gray = gray.resize((round(gray.width * factor), round(gray.height * factor)), Image.BICUBIC)
     else:
@@ -36,23 +57,39 @@ def clean(image: Image.Image) -> tuple[np.ndarray, float]:
     small = gray.reduce(8)
     paper = small.filter(ImageFilter.MaxFilter(7)).filter(ImageFilter.GaussianBlur(4))
     paper = np.asarray(paper.resize(gray.size, Image.BILINEAR), dtype=np.float32)
-    level = pixels / np.maximum(paper, 1.0)
-    ink = level < _otsu(level)
+    level_map = pixels / np.maximum(paper, 1.0)
+    ink = level_map < _otsu(level_map)
 
     labels, count = ndimage.label(ink, structure=np.ones((3, 3)))
     if count == 0:
         return ink, factor
     areas = np.bincount(labels.ravel())[1:]
-    heights = np.array([s[0].stop - s[0].start for s in ndimage.find_objects(labels)])
+    shapes = ndimage.find_objects(labels)
+    heights = np.array([s[0].stop - s[0].start for s in shapes])
     letter = float(np.median(heights[areas >= np.median(areas)]))
     drop = areas < max(4.0, SPECK * letter ** 2)
     # Thin slivers right at the page's edges: the shadow of the paper's edge, not print.
     h, w = ink.shape
-    for k, (rows, cols) in enumerate(ndimage.find_objects(labels)):
+    for k, (rows, cols) in enumerate(shapes):
         thin = min(rows.stop - rows.start, cols.stop - cols.start) <= 0.25 * letter
-        at_edge = cols.stop <= EDGE * w or cols.start >= (1 - EDGE) * w or             rows.stop <= EDGE * h or rows.start >= (1 - EDGE) * h
+        at_edge = (cols.stop <= EDGE * w or cols.start >= (1 - EDGE) * w
+                   or rows.stop <= EDGE * h or rows.start >= (1 - EDGE) * h)
         drop[k] |= thin and at_edge
     ink[np.isin(labels, np.flatnonzero(drop) + 1)] = False
+
+    if strength.repair:
+        radius = max(1, round(strength.repair * letter))
+        disk = np.hypot(*np.mgrid[-radius:radius + 1, -radius:radius + 1]) <= radius
+        ink = ndimage.binary_closing(ink, structure=disk)  # hairline breaks in a stroke
+    if strength.smooth or strength.repair:
+        holes, _ = ndimage.label(~ink)
+        hole_areas = np.bincount(holes.ravel())
+        pinholes = np.flatnonzero(hole_areas < SPECK * letter ** 2)
+        ink[np.isin(holes, pinholes[pinholes > 0])] = True  # white specks inside strokes
+    if strength.smooth:
+        # Blurring the ink and cutting it at half rounds off jags and nicks but keeps any
+        # stroke wider than the blur, so thin marks (jinkim, harakat) stay.
+        ink = ndimage.gaussian_filter(ink.astype(np.float32), strength.smooth * letter) > 0.5
     return ink, factor
 
 
@@ -68,14 +105,14 @@ def _otsu(values: np.ndarray) -> float:
     return float(centers[np.nanargmax(between)])
 
 
-def preview(image: Image.Image) -> Image.Image:
+def preview(image: Image.Image, level: int = 1) -> Image.Image:
     """The cleaned page as an image at the scan's own size (fast; no tracing)."""
-    ink, factor = clean(image)
+    ink, factor = clean(image, level)
     cleaned = Image.fromarray(np.where(ink, 0, 255).astype(np.uint8))
     return cleaned.resize(image.size, Image.LANCZOS) if factor > 1 else cleaned
 
 
-def outline_ops(ink: np.ndarray, scale: float, page_height: float) -> bytes:
+def outline_ops(ink: np.ndarray, scale: float, page_height: float, level: int = 1) -> bytes:
     """PDF drawing operators filling the ink's traced outlines, in points (y up).
 
     Coordinates are written as whole half-pixels: finer than any zoom shows, and the
@@ -84,6 +121,7 @@ def outline_ops(ink: np.ndarray, scale: float, page_height: float) -> bytes:
     import potrace
     from scipy import ndimage
 
+    strength = LEVELS[level]
     half = scale / 2
     out = [f"q 0 g {half:.6f} 0 0 {-half:.6f} 0 {page_height:.3f} cm"]
     labels, _ = ndimage.label(ink, structure=np.ones((3, 3)))
@@ -97,7 +135,8 @@ def outline_ops(ink: np.ndarray, scale: float, page_height: float) -> bytes:
             return f"{round((p.x + dx) * 2)} {round((p.y + dy) * 2)}"
 
         # potracer reads dark (0) as ink, like a grayscale image.
-        for curve in potrace.Bitmap(~shape).trace(turdsize=2, alphamax=1.0, opticurve=True, opttolerance=0.5):
+        for curve in potrace.Bitmap(~shape).trace(turdsize=2, alphamax=strength.alphamax, opticurve=True,
+                                                   opttolerance=strength.tolerance):
             out.append(f"{point(curve.start_point)} m")
             for segment in curve:
                 if segment.is_corner:
@@ -109,28 +148,37 @@ def outline_ops(ink: np.ndarray, scale: float, page_height: float) -> bytes:
     return "\n".join(out).encode()
 
 
-def _page_outline(paths: list[Path], index: int) -> tuple[float, float, bytes]:
-    """(width, height, drawing) of one enhanced page; run in a worker process."""
+def _page_outline(paths: list[Path], level: int, index: int) -> tuple[float, float, bytes | None]:
+    """(width, height, drawing) of one enhanced page; run in a worker process.
+
+    A page that cannot be enhanced (a damaged image, say) gives no drawing, and is
+    copied as it is rather than stopping a long book.
+    """
     from .export import page_size
     from .pipeline import Document
 
     doc = Document(paths)
     try:
         image = doc.page_image(index)
-        ink, _ = clean(image)
         width, height = page_size(doc, index, image)
-        return width, height, outline_ops(ink, width / ink.shape[1], height)
+        try:
+            ink, _ = clean(image, level)
+            return width, height, outline_ops(ink, width / ink.shape[1], height, level)
+        except Exception:  # noqa: BLE001 - one bad page must not end the whole book
+            return width, height, None
     finally:
         doc.close()
 
 
 def to_enhanced_pdf(doc, results: list, path: Path, pages: list[int],
-                    progress: Callable[[int, int], bool] | None = None, workers: int = 0) -> bool:
+                    progress: Callable[[int, int], bool] | None = None, workers: int = 0,
+                    level: int = 1) -> bool:
     """``pages`` of ``doc`` cleaned and traced into a PDF of curves; False if stopped early.
 
-    Pages are traced in parallel, one per processor core. Pages that were read also
-    carry their recognized text, invisible, for searching. ``progress(done, total)``
-    may return False to stop; nothing is saved then.
+    Pages are traced in parallel, one per processor core, and appended to the file in
+    batches, so a book of thousands of pages needs no more memory than a batch.
+    Pages that were read also carry their recognized text, invisible, for searching.
+    ``progress(done, total)`` may return False to stop; the unfinished file is removed.
     """
     import os
     from concurrent.futures import ProcessPoolExecutor
@@ -138,30 +186,60 @@ def to_enhanced_pdf(doc, results: list, path: Path, pages: list[int],
 
     import pymupdf
 
-    from .export import add_hidden_text
+    from .export import _pixmap, add_hidden_text
 
     workers = workers or max(1, (os.cpu_count() or 2) - 1)
-    work = partial(_page_outline, doc.paths)
+    work = partial(_page_outline, doc.paths, level)
     pool = ProcessPoolExecutor(min(workers, len(pages))) if workers > 1 and len(pages) > 1 else None
-    out = pymupdf.open()
+    partial_path = path.with_name(path.name + ".part")
+    partial_path.unlink(missing_ok=True)
+    batch = pymupdf.open()
+
+    def flush() -> None:
+        """Append the pages built so far to the file and free them."""
+        nonlocal batch
+        if not batch.page_count:
+            return
+        if partial_path.exists():
+            batch.subset_fonts()
+            with pymupdf.open(partial_path) as written:
+                written.insert_pdf(batch)
+                written.saveIncr()
+        else:
+            batch.subset_fonts()
+            batch.save(partial_path, garbage=3, deflate=True)
+        batch.close()
+        batch = pymupdf.open()
+
+    finished = False
     try:
-        outlines = pool.map(work, pages) if pool else map(work, pages)
+        outlines = pool.map(work, pages, chunksize=1) if pool else map(work, pages)
         for done, (index, (width, height, drawing)) in enumerate(zip(pages, outlines)):
             if progress is not None and progress(done, len(pages)) is False:
                 return False
-            page = out.new_page(width=width, height=height)
-            xref = out.get_new_xref()
-            out.update_object(xref, "<<>>")
-            out.update_stream(xref, drawing)
-            page.set_contents(xref)
+            page = batch.new_page(width=width, height=height)
+            if drawing is None:
+                page.insert_image(page.rect, pixmap=_pixmap(doc.page_image(index)))
+            else:
+                xref = batch.get_new_xref()
+                batch.update_object(xref, "<<>>")
+                batch.update_stream(xref, drawing)
+                page.set_contents(xref)
             result = results[index] if index < len(results) else None
             if result is not None:
                 add_hidden_text(page, result, doc.page_image(index))
+            if batch.page_count == BATCH:
+                flush()
+        flush()
         if progress is not None and progress(len(pages), len(pages)) is False:
             return False
-        out.save(path, garbage=3, deflate=True)
+        finished = True
         return True
     finally:
-        out.close()
+        batch.close()
         if pool is not None:
             pool.shutdown(wait=False, cancel_futures=True)
+        if finished:
+            partial_path.replace(path)
+        else:
+            partial_path.unlink(missing_ok=True)

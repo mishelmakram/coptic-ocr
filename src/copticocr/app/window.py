@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, QSize, Qt, QTimer
-from PySide6.QtGui import QAction, QFont, QIcon, QKeySequence, QPixmap
+from PySide6.QtGui import QAction, QActionGroup, QFont, QIcon, QKeySequence, QPixmap
 from PySide6.QtWidgets import (QApplication, QFileDialog, QFrame, QLabel, QListWidget, QListWidgetItem,
                                QMainWindow, QMessageBox, QProgressBar, QProgressDialog, QPushButton, QSizePolicy,
                                QSplitter, QStackedWidget, QToolBar, QVBoxLayout, QWidget)
@@ -105,9 +106,10 @@ class MainWindow(QMainWindow):
                                              "type", "converted_tip", checkable=True)
         self.enhanced_action = self._action("enhanced", lambda _: self._view_mode(self.enhanced_action), "Ctrl+H",
                                             "wand", "enhanced_tip", checkable=True)
-        self._enhanced: dict[int, object] = {}  # page index -> cleaned page, for the view
+        self._enhanced: dict[tuple[int, int], object] = {}  # (page, level) -> cleaned page, for the view
         self.dark_action = self._action("dark_mode", self.toggle_dark, "Ctrl+Shift+D", "moon", checkable=True)
         self.dark_action.setChecked(self.theme.dark)
+        self.enhance_level = int(self.settings.value("enhance_level", 2))
         self.keys_action = self._action("keyboard", self.toggle_keys, None, "keyboard", "keyboard_tip",
                                         checkable=True)
         self.keys_action.setChecked(self.settings.value("legacy_keys", True, bool))
@@ -129,6 +131,14 @@ class MainWindow(QMainWindow):
         menu.addActions([self.read_action, self.read_all_action, self.stop_action])
         menu.addSeparator()
         menu.addAction(self.keys_action)
+        levels = menu.addMenu(tr("enhance_level"))
+        group = QActionGroup(self)
+        for number in (1, 2, 3):
+            action = levels.addAction(tr(f"level_{number}"))
+            action.setCheckable(True)
+            action.setChecked(number == self.enhance_level)
+            action.triggered.connect(lambda _=False, n=number: self._set_level(n))
+            group.addAction(action)
         menu.addAction(tr("choose_model"), self.choose_model)
         self.cpu_action = menu.addAction(tr("use_cpu"))
         self.cpu_action.setCheckable(True)
@@ -361,14 +371,21 @@ class MainWindow(QMainWindow):
         result = self.results[self.current]
         converted = self.converted_action.isChecked() and result is not None
         if self.enhanced_action.isChecked():
-            if self.current not in self._enhanced:
+            key = (self.current, self.enhance_level)
+            if key not in self._enhanced:
                 QApplication.setOverrideCursor(Qt.WaitCursor)
-                self._enhanced = {self.current: enhance.preview(self.page_image)}  # keep one page
+                self._enhanced = {key: enhance.preview(self.page_image, self.enhance_level)}  # keep one page
                 QApplication.restoreOverrideCursor()
-            self.view.show_page(self._enhanced[self.current], result, quiet=True)
+            self.view.show_page(self._enhanced[key], result, quiet=True)
             return
         image = typeset_preview(self.page_image, result) if converted else self.page_image
         self.view.show_page(image, result, quiet=converted)
+
+    def _set_level(self, level: int) -> None:
+        self.enhance_level = level
+        self.settings.setValue("enhance_level", level)
+        if self.enhanced_action.isChecked():
+            self._show_current()
 
     def _view_mode(self, chosen: QAction) -> None:
         """The converted and enhanced views exclude each other; neither shows the scan."""
@@ -480,7 +497,7 @@ class MainWindow(QMainWindow):
         if self.doc is None:
             return
         read = sum(r is not None for r in self.results)
-        dialog = ExportDialog(self, read, len(self.doc), "book_pdf" if read else "enhanced")
+        dialog = ExportDialog(self, read, len(self.doc), "book_pdf" if read else "enhanced", self.enhance_level)
         if dialog.exec() != ExportDialog.Accepted:
             return
         choice = dialog.choice()
@@ -493,6 +510,7 @@ class MainWindow(QMainWindow):
             return
         if choice.format == "enhanced":
             pages = [self.current] if choice.current_page_only else list(range(len(self.doc)))
+            self._set_level(choice.level)
             self._enhance_to(Path(path), pages)
             return
         QApplication.setOverrideCursor(Qt.WaitCursor)
@@ -523,11 +541,18 @@ class MainWindow(QMainWindow):
         progress.setWindowModality(Qt.WindowModal)
         progress.setMinimumDuration(0)
         results = list(self.results)
-        job = Job(lambda report: enhance.to_enhanced_pdf(self.doc, results, path, pages, report))
+        level = self.enhance_level
+        job = Job(lambda report: enhance.to_enhanced_pdf(self.doc, results, path, pages, report, level=level))
+        started = time.monotonic()
 
         def advanced(done: int, total: int) -> None:
             progress.setValue(done)
-            progress.setLabelText(f"{tr('enhancing')}\n{tr('enhancing_of', min(done + 1, total), total)}")
+            text = f"{tr('enhancing')}\n{tr('enhancing_of', min(done + 1, total), total)}"
+            if done >= 3:  # once the pace is known
+                left = (time.monotonic() - started) / done * (total - done)
+                when = tr("under_minute") if left < 60 else tr("minutes", round(left / 60))
+                text += f"\n{tr('time_left', when)}"
+            progress.setLabelText(text)
 
         def finished(completed: bool, error: str) -> None:
             progress.close()

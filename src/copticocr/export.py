@@ -104,6 +104,7 @@ def to_searchable_pdf(doc: Document, results: list[PageResult | None], path: Pat
                     page.insert_image(page.rect, pixmap=_pixmap(image))
             if result is not None:
                 add_hidden_text(page, result, doc.page_image(index))
+        out.subset_fonts()  # embed only the letters used, not whole fonts
         out.save(path, garbage=3, deflate=True)
     finally:
         out.close()
@@ -119,14 +120,19 @@ def add_hidden_text(page: pymupdf.Page, result: PageResult, image) -> None:
     page.insert_font(fontname="coptic", fontfile=str(font_file))
     scale = page.rect.width / result.size[0]
     ink = binarize(np.asarray(image.convert("L")))
-    arabic_font = arabic_pdf_font()
+    arabic_font = next((path for path in HIDDEN_ARABIC_FONTS if path.exists()), None)
+    if arabic_font is not None:
+        page.insert_font(fontname="arabic", fontfile=str(arabic_font))
+        arabic_metrics = pymupdf.Font(fontfile=str(arabic_font))
     for line in result.lines:
         if line.script == "arabic" and line.text.strip() and arabic_font is not None:
+            # Invisible text needs no shaping: plain letters, laid out right to left, copy and
+            # search as written, where shaped text would copy out as presentation forms.
             b = line.box
-            rect = pymupdf.Rect(b.x0 * scale, b.y0 * scale, b.x1 * scale, b.y1 * scale)
-            page.insert_htmlbox(rect, f'<p dir="rtl">{html.escape(line.text)}</p>',
-                                css=_arabic_css(arabic_font, rect.height * 0.7, "text-align: justify;"),
-                                archive=pymupdf.Archive(str(arabic_font.parent)), scale_low=0, opacity=0)
+            width, height = b.width * scale, b.height * scale
+            size = min(width / max(arabic_metrics.text_length(line.text, 1), 1e-3), height)
+            page.insert_text(pymupdf.Point(b.x0 * scale, b.y1 * scale - 0.25 * height), visual_order(line.text),
+                             fontname="arabic", fontsize=size, render_mode=3)
             continue
         if line.script != "coptic" or not line.text.strip():
             continue
@@ -155,6 +161,25 @@ def page_size(doc: Document, index: int, image) -> tuple[float, float]:
 
 
 ARABIC_PDF_FONTS = [Path("C:/Windows/Fonts") / name for name in ("times.ttf", "arial.ttf", "tahoma.ttf")]
+
+
+# For invisible text: fonts that give plain letters back when Arabic is copied or searched.
+HIDDEN_ARABIC_FONTS = [Path("C:/Windows/Fonts") / name for name in ("trado.ttf", "arabtype.ttf", "andlso.ttf")]
+
+
+def visual_order(text: str) -> str:
+    """Right-to-left text as it is laid out from the left: letters (with their marks) reversed.
+
+    Text drawn this way in a PDF is read back by viewers in its proper order."""
+    import unicodedata
+
+    clusters: list[str] = []
+    for ch in text:
+        if unicodedata.combining(ch) and clusters:
+            clusters[-1] += ch
+        else:
+            clusters.append(ch)
+    return "".join(reversed(clusters))
 
 
 def arabic_pdf_font() -> Path | None:
@@ -224,6 +249,7 @@ def to_typeset_pdf(doc: Document, results: list[PageResult | None], path: Path) 
             if result is not None:
                 image = doc.page_image(index)
                 typeset_page(out, image, result, page_size(doc, index, image))
+        out.subset_fonts()  # embed only the letters used, not whole fonts
         out.save(path, garbage=3, deflate=True)
     finally:
         out.close()

@@ -340,6 +340,7 @@ def to_pdf_book(doc: Document, results: list[PageResult | None], path: Path, sta
                 y += row_height + ROW_GAP
         if not out.page_count:
             out.new_page()
+        out.subset_fonts()  # embed only the letters used, not whole fonts
         out.save(path, garbage=3, deflate=True)
     finally:
         out.close()

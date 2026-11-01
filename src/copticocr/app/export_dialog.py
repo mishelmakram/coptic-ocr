@@ -28,6 +28,7 @@ class ExportChoice:
     current_page_only: bool
     stanzas: bool = True
     rule: bool = False
+    level: int = 2
 
     @property
     def suffix(self) -> str:
@@ -43,7 +44,7 @@ def coptic_fonts() -> list[str]:
 
 
 class ExportDialog(QDialog):
-    def __init__(self, parent, pages_read: int, pages_total: int, start: str = "book_pdf"):
+    def __init__(self, parent, pages_read: int, pages_total: int, start: str = "book_pdf", level: int = 2):
         super().__init__(parent)
         self.setWindowTitle(tr("export_title"))
         self.setMinimumWidth(440)
@@ -75,6 +76,17 @@ class ExportDialog(QDialog):
         self.rule = QCheckBox(tr("column_rule"))
         box.addWidget(self.rule)
         self.arrangement_group = group
+        layout.addWidget(group)
+
+        group = QGroupBox(tr("enhance_level"))
+        box = QVBoxLayout(group)
+        self.levels = QButtonGroup(self)
+        for number in (1, 2, 3):
+            button = QRadioButton(tr(f"level_{number}"))
+            button.setChecked(number == level)
+            self.levels.addButton(button, number)
+            box.addWidget(button)
+        self.level_group = group
         layout.addWidget(group)
 
         group = QGroupBox(tr("coptic_font"))
@@ -115,6 +127,8 @@ class ExportDialog(QDialog):
     def _update(self, *_) -> None:
         fmt = FORMATS[self.formats.checkedId()][0]
         self.arrangement_group.setEnabled(fmt in BOOK)
+        self.level_group.setVisible(fmt == "enhanced")
+        self.adjustSize()
         self.all_pages.setText(tr("pages_all", self.pages_total) if fmt == "enhanced"
                                else tr("pages_read_only", self.pages_read))
         self.font_group.setEnabled(fmt in WORD)  # PDFs set the Coptic in the bundled Unicode font
@@ -122,4 +136,4 @@ class ExportDialog(QDialog):
     def choice(self) -> ExportChoice:
         fmt, _, file_filter = FORMATS[self.formats.checkedId()]
         return ExportChoice(fmt, file_filter, self.font.currentData(), not self.all_pages.isChecked(),
-                            self.by_stanza.isChecked(), self.rule.isChecked())
+                            self.by_stanza.isChecked(), self.rule.isChecked(), self.levels.checkedId())
