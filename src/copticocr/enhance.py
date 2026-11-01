@@ -23,20 +23,20 @@ PINHOLE = 0.0012  # of the letter height squared: white holes this small inside 
 
 @dataclass(frozen=True)
 class Strength:
-    """How hard a page is worked on. Every level keeps the scan's letter shapes; higher levels
-    work at a finer resolution and even out the outline more."""
+    """How finely a page is worked on. No level changes a letter's shape: higher levels trace at
+    a finer resolution and steady the scan's grain before it is cut into ink and paper."""
 
     work_width: int  # pixels: scans narrower than this are enlarged before tracing
-    smooth: float  # of the letter height: blur of the ink before it is cut again, rounding jagged edges
-    repair: float  # of the letter height: hairline breaks in strokes closed, pinholes filled
+    smooth: float  # blur of the gray scan before it is cut, in the scan's own pixels (grain, not shape)
+    mend: bool  # fill pinholes inside strokes and close one-pixel gaps
     alphamax: float  # Potrace: how readily corners become curves
     tolerance: float  # Potrace: how freely curves are joined
 
 
 LEVELS = {
-    1: Strength(2400, 0.0, 0.0, 1.0, 0.5),       # clean and trace
-    2: Strength(3200, 0.045, 0.0, 1.2, 0.5),     # and smooth the edges, fill pinholes
-    3: Strength(4000, 0.065, 0.008, 1.3, 0.6),   # and mend broken strokes: like freshly printed
+    1: Strength(2400, 0.0, False, 1.0, 0.5),   # clean and trace
+    2: Strength(3200, 0.35, False, 1.1, 0.5),  # finer, with the scan's grain steadied
+    3: Strength(4000, 0.6, True, 1.2, 0.5),    # finer still, pinholes and hairline gaps mended
 }
 
 
@@ -59,6 +59,10 @@ def clean(image: Image.Image, level: int = 1) -> tuple[np.ndarray, float]:
     paper = small.filter(ImageFilter.MaxFilter(7)).filter(ImageFilter.GaussianBlur(4))
     paper = np.asarray(paper.resize(gray.size, Image.BILINEAR), dtype=np.float32)
     level_map = pixels / np.maximum(paper, 1.0)
+    if strength.smooth:
+        # Steadying the gray before it is cut follows the print's own outline; blurring the
+        # cut ink instead would round and thicken the letters.
+        level_map = ndimage.gaussian_filter(level_map, strength.smooth * factor)
     ink = level_map < _otsu(level_map)
 
     labels, count = ndimage.label(ink, structure=np.ones((3, 3)))
@@ -78,24 +82,16 @@ def clean(image: Image.Image, level: int = 1) -> tuple[np.ndarray, float]:
         drop[k] |= thin and at_edge
     ink[np.isin(labels, np.flatnonzero(drop) + 1)] = False
 
-    if strength.smooth or strength.repair:
-        # The eyes of letters (ϧ, ⲑ, ⲁ): white enclosed by ink and larger than a pinhole.
-        # Mending and smoothing may close them; they are put back at the end.
+    if strength.mend:
+        # Pinholes (white specks inside strokes) are filled and one-pixel gaps closed; the eyes
+        # of letters (ϧ, ⲑ, ⲁ), larger than any pinhole, are kept exactly as they were.
         holes, _ = ndimage.label(~ink)
         background = np.unique(np.concatenate([holes[0], holes[-1], holes[:, 0], holes[:, -1]]))
         enclosed = (holes > 0) & ~np.isin(holes, background)
-        hole_areas = np.bincount(holes.ravel())
-        small = hole_areas < PINHOLE * letter ** 2
+        small = np.bincount(holes.ravel()) < PINHOLE * letter ** 2
         eyes = enclosed & ~small[holes]
-        ink |= enclosed & small[holes]  # pinholes: white specks inside strokes
-        if strength.repair:
-            radius = max(1, round(strength.repair * letter))
-            disk = np.hypot(*np.mgrid[-radius:radius + 1, -radius:radius + 1]) <= radius
-            ink = ndimage.binary_closing(ink, structure=disk)  # hairline breaks in a stroke
-        if strength.smooth:
-            # Blurring the ink and cutting it at half rounds off jags and nicks but keeps any
-            # stroke wider than the blur, so thin marks (jinkim, harakat) stay.
-            ink = ndimage.gaussian_filter(ink.astype(np.float32), strength.smooth * letter) > 0.5
+        ink |= enclosed & small[holes]
+        ink = ndimage.binary_closing(ink, structure=np.ones((3, 3)))
         ink &= ~eyes
     return ink, factor
 
