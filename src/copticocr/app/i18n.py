@@ -66,6 +66,7 @@ STRINGS = {
     "level_2": ("أدق: رسم الحروف بدقة أعلى", "Finer: letters traced at a higher resolution"),
     "level_3": ("الأدق: دقة أعلى وسد النقط البيضاء داخل الحروف",
                 "Finest: higher still, white specks inside strokes filled"),
+    "enhancing_workers": ("يعمل على {0} صفحة معًا، حسب الذاكرة المتاحة", "{0} pages at a time, as free memory allows"),
     "time_left": ("باقي حوالي {0}", "About {0} left"),
     "minutes": ("{0} دقيقة", "{0} min"),
     "under_minute": ("أقل من دقيقة", "under a minute"),

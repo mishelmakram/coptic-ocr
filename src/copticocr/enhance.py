@@ -19,6 +19,12 @@ SPECK = 0.004  # of the letter height squared: ink shapes smaller than this are 
 EDGE = 0.03  # of the page size: the margin where thin slivers are taken for the paper's edge
 BATCH = 50  # pages held in memory before they are appended to the file
 PINHOLE = 0.0012  # of the letter height squared: white holes this small inside ink are scanning faults
+# Memory of one page being enhanced: a worker process's own (Python and its libraries) plus
+# about this much per pixel at the tracing resolution (measured: 144 MB at 2400 px wide,
+# 467 MB at 4800 px wide, a little over 13 bytes a pixel).
+WORKER_BASE = 160 * 2 ** 20
+BYTES_PER_PIXEL = 15
+MEMORY_SHARE = 0.7  # of the memory free at the start; the rest stays for Windows and other programs
 
 
 @dataclass(frozen=True)
@@ -44,7 +50,12 @@ LEVELS = {
 
 
 def clean(image: Image.Image, level: int = 1) -> tuple[np.ndarray, float]:
-    """(ink mask, enlargement) of a page: True where there is ink, specks removed."""
+    """(ink mask, enlargement) of a page: True where there is ink, specks removed.
+
+    Memory matters: several pages are cleaned at once, at up to 35 million pixels each. Work
+    is done in place where it can be, and shapes are picked out through lookup tables (a
+    value per shape) rather than by comparing every pixel with a list of shapes.
+    """
     from scipy import ndimage
 
     strength = LEVELS[level]
@@ -54,19 +65,22 @@ def clean(image: Image.Image, level: int = 1) -> tuple[np.ndarray, float]:
         gray = gray.resize((round(gray.width * factor), round(gray.height * factor)), Image.BICUBIC)
     else:
         factor = 1.0
-    pixels = np.asarray(gray, dtype=np.float32)
 
     # The paper: the page with its text closed over, smoothed. Dividing by it evens out
     # shading, yellowing and uneven lighting in photos.
-    small = gray.reduce(8)
-    paper = small.filter(ImageFilter.MaxFilter(7)).filter(ImageFilter.GaussianBlur(4))
+    paper = gray.reduce(8).filter(ImageFilter.MaxFilter(7)).filter(ImageFilter.GaussianBlur(4))
     paper = np.asarray(paper.resize(gray.size, Image.BILINEAR), dtype=np.float32)
-    level_map = pixels / np.maximum(paper, 1.0)
+    level_map = np.asarray(gray, dtype=np.float32)
+    del gray
+    np.maximum(paper, 1.0, out=paper)
+    np.divide(level_map, paper, out=level_map)
+    del paper
     if strength.smooth:
         # Steadying the gray before it is cut follows the print's own outline; blurring the
         # cut ink instead would round and thicken the letters.
         level_map = ndimage.gaussian_filter(level_map, strength.smooth * factor)
     ink = level_map < _otsu(level_map)
+    del level_map
 
     labels, count = ndimage.label(ink, structure=np.ones((3, 3)))
     if count == 0:
@@ -83,18 +97,20 @@ def clean(image: Image.Image, level: int = 1) -> tuple[np.ndarray, float]:
         at_edge = (cols.stop <= EDGE * w or cols.start >= (1 - EDGE) * w
                    or rows.stop <= EDGE * h or rows.start >= (1 - EDGE) * h)
         drop[k] |= thin and at_edge
-    ink[np.isin(labels, np.flatnonzero(drop) + 1)] = False
+    keep = np.concatenate([[False], ~drop])  # per shape, label 0 being the paper
+    ink = keep[labels]
+    del labels
 
     if strength.mend:
         # Pinholes (white specks inside strokes) are filled; the eyes of letters (ϧ, ⲑ, ⲁ),
-        # larger than any pinhole, are kept exactly as they were.
+        # larger than any pinhole, are left as they are.
         holes, _ = ndimage.label(~ink)
-        background = np.unique(np.concatenate([holes[0], holes[-1], holes[:, 0], holes[:, -1]]))
-        enclosed = (holes > 0) & ~np.isin(holes, background)
-        small = np.bincount(holes.ravel()) < PINHOLE * letter ** 2
-        eyes = enclosed & ~small[holes]
-        ink |= enclosed & small[holes]
-        ink &= ~eyes
+        pinhole = np.bincount(holes.ravel()) < PINHOLE * letter ** 2
+        pinhole[0] = False  # the ink itself
+        for edge in (holes[0], holes[-1], holes[:, 0], holes[:, -1]):
+            pinhole[edge] = False  # white touching the page's edge is paper, not a hole
+        ink |= pinhole[holes]
+        del holes
     return ink, factor
 
 
@@ -181,6 +197,49 @@ def outline_ops(ink: np.ndarray, scale: float, page_height: float, level: int = 
     return "\n".join(out).encode()
 
 
+def available_memory() -> int:
+    """Physical memory free now, in bytes."""
+    import os
+    import sys
+
+    if sys.platform == "win32":
+        import ctypes
+
+        class Status(ctypes.Structure):
+            _fields_ = [("length", ctypes.c_ulong), ("load", ctypes.c_ulong)] + [
+                (name, ctypes.c_ulonglong) for name in
+                ("total", "available", "page_total", "page_free", "virtual_total", "virtual_free", "extended")]
+
+        status = Status()
+        status.length = ctypes.sizeof(Status)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            return int(status.available)
+    try:
+        return os.sysconf("SC_AVPHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
+    except (ValueError, OSError, AttributeError):
+        return 2 * 2 ** 30
+
+
+def plan_workers(doc, pages: list[int], level: int) -> int:
+    """How many pages to enhance at once: one per processor core, as far as free memory allows.
+
+    The largest of a few sample pages sets the memory a page needs, so a book with an odd
+    large plate does not run the machine out of memory.
+    """
+    import os
+
+    cores = max(1, (os.cpu_count() or 2) - 1)
+    if len(pages) <= 1:
+        return 1
+    sample = sorted({pages[0], pages[len(pages) // 2], pages[-1]})
+    per_page = 0
+    for index in sample:
+        width, height = doc.page_image(index).size
+        factor = min(6.0, max(1.0, LEVELS[level].work_width / width))
+        per_page = max(per_page, WORKER_BASE + int(width * factor * height * factor * BYTES_PER_PIXEL))
+    return max(1, min(cores, len(pages), int(available_memory() * MEMORY_SHARE // per_page)))
+
+
 def _page_outline(paths: list[Path], level: int, index: int) -> tuple[float, float, bytes | None]:
     """(width, height, drawing) of one enhanced page; run in a worker process.
 
@@ -208,8 +267,9 @@ def to_enhanced_pdf(doc, results: list, path: Path, pages: list[int],
                     level: int = 1) -> bool:
     """``pages`` of ``doc`` cleaned and traced into a PDF of curves; False if stopped early.
 
-    Pages are traced in parallel, one per processor core, and appended to the file in
-    batches, so a book of thousands of pages needs no more memory than a batch.
+    Pages are traced in parallel, as many at once as the cores and the free memory allow
+    (``plan_workers``), and appended to the file in batches, so a book of thousands of pages
+    needs no more memory than a batch.
     Pages that were read also carry their recognized text, invisible, for searching.
     ``progress(done, total)`` may return False to stop; the unfinished file is removed.
     """
@@ -221,7 +281,7 @@ def to_enhanced_pdf(doc, results: list, path: Path, pages: list[int],
 
     from .export import _pixmap, add_hidden_text
 
-    workers = workers or max(1, (os.cpu_count() or 2) - 1)
+    workers = workers or plan_workers(doc, pages, level)
     work = partial(_page_outline, doc.paths, level)
     pool = ProcessPoolExecutor(min(workers, len(pages))) if workers > 1 and len(pages) > 1 else None
     partial_path = path.with_name(path.name + ".part")

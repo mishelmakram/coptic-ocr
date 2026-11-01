@@ -733,12 +733,15 @@ class MainWindow(QMainWindow):
         progress.setMinimumDuration(0)
         results = list(self.results)
         level = self.enhance_level
-        job = Job(lambda report: enhance.to_enhanced_pdf(self.doc, results, path, pages, report, level=level))
+        workers = enhance.plan_workers(self.doc, pages, level)  # as many at once as free memory allows
+        job = Job(lambda report: enhance.to_enhanced_pdf(self.doc, results, path, pages, report, workers=workers,
+                                                         level=level))
         started = time.monotonic()
 
         def advanced(done: int, total: int) -> None:
             progress.setValue(done)
-            text = f"{tr('enhancing')}\n{tr('enhancing_of', min(done + 1, total), total)}"
+            text = (f"{tr('enhancing')}\n{tr('enhancing_of', min(done + 1, total), total)}"
+                    f"\n{tr('enhancing_workers', workers)}")
             if done >= 3:  # once the pace is known
                 left = (time.monotonic() - started) / done * (total - done)
                 when = tr("under_minute") if left < 60 else tr("minutes", round(left / 60))
