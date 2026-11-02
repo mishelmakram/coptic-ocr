@@ -5,7 +5,7 @@ VSVersionInfo(
       StringStruct("CompanyName", "Mishel Makram"),
       StringStruct("FileDescription", "Coptic OCR"),
       StringStruct("FileVersion", "0.1.0"),
-      StringStruct("LegalCopyright", "AGPL-3.0-or-later"),
+      StringStruct("LegalCopyright", "Copyright © 2026 Mishel Makram. AGPL-3.0-or-later"),
       StringStruct("ProductName", "Coptic OCR"),
       StringStruct("ProductVersion", "0.1.0")])]),
     VarFileInfo([VarStruct("Translation", [1033, 1200])])

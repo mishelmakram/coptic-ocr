@@ -45,6 +45,7 @@ def main() -> None:
             shutil.copy2(ROOT / "models" / name / file, target / file)
         json.loads((target / "model.json").read_text(encoding="utf-8"))  # exported whole
     shutil.copy2(ROOT / "LICENSE", APP / "LICENSE.txt")
+    shutil.copy2(ROOT / "NOTICE", APP / "NOTICE.txt")
 
     portable = DIST / f"CopticOCR-{version()}-portable.zip"
     with zipfile.ZipFile(portable, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zip_file:

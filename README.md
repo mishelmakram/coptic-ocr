@@ -71,4 +71,8 @@ repository. Put them in `fonts/` and `resources/` locally (both are git-ignored)
 
 ## License
 
-[AGPL-3.0-or-later](LICENSE)
+Copyright © 2026 Mishel Makram.
+
+This program is free software: you can redistribute it and/or modify it under the
+terms of the [GNU Affero General Public License](LICENSE), version 3 or (at your
+option) any later version. See [NOTICE](NOTICE) for the third-party parts.

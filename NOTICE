@@ -1,0 +1,12 @@
+Coptic OCR
+Copyright (C) 2026 Mishel Makram
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version. It is distributed in the hope that it will be useful, but
+WITHOUT ANY WARRANTY; see the LICENSE file for details.
+
+Third-party parts:
+- Noto Sans Coptic, SIL Open Font License 1.1.
+- Potrace (page enhancement), GNU GPL.

@@ -89,11 +89,11 @@ STRINGS = {
     "about_text": (
         "<h3>Coptic OCR</h3><p>برنامج مفتوح المصدر للتعرف على نصوص الكتب الكنسية القبطية "
         "وتحويلها إلى PDF قابل للبحث وWord ونص.</p>"
-        "<p>الترخيص: GNU AGPL 3.0<br>المؤلف: ميشيل مكرم</p>"
+        "<p>© 2026 ميشيل مكرم<br>الترخيص: GNU AGPL 3.0</p>"
         "<p>خط Noto Sans Coptic مرخص برخصة SIL Open Font License. "
         "تحسين الصفحات يستخدم Potrace (رخصة GPL).</p>",
         "<h3>Coptic OCR</h3><p>Open-source OCR for Coptic church books: searchable PDF, "
-        "Word and plain text.</p><p>License: GNU AGPL 3.0<br>Author: Mishel Makram</p>"
+        "Word and plain text.</p><p>Copyright © 2026 Mishel Makram<br>License: GNU AGPL 3.0</p>"
         "<p>Noto Sans Coptic is licensed under the SIL Open Font License. "
         "Page enhancement uses Potrace (GPL).</p>"),
     "quit": ("خروج", "Quit"),
