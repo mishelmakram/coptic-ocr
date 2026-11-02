@@ -63,7 +63,7 @@ def strokes(ink_levels):
 
 
 def test_faded_print_comes_out_whole_and_no_bolder():
-    image = strokes([20, 150, 200])  # dark, faded, very faded
+    image = strokes([20, 110, 160])  # dark, faded, very faded (a third as dark)
     for level in (1, 2, 3):
         ink, factor = clean(image, level)
         for k in range(3):
@@ -79,3 +79,16 @@ def test_levels_keep_thick_strokes_solid():
     for level in (1, 2, 3):
         ink, factor = clean(image, level)
         assert ink[int(230 * factor), int(150 * factor):int(850 * factor)].all(), level  # not hollowed
+
+
+def test_pale_frames_stay_paper():
+    """The light grey boxes of a web page or a modern book are not faded print."""
+    image = Image.new("L", (900, 400), 255)
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((40, 40, 860, 360), outline=228, width=2)   # a pale frame
+    draw.rectangle((880, 0, 899, 399), fill=230)                # a pale band at the edge
+    for x in range(100, 800, 20):
+        draw.rectangle((x, 180, x + 5, 219), fill=40)            # the print
+    ink, factor = clean(image, 1)
+    assert ink[int(200 * factor), int(103 * factor)]
+    assert not ink[int(41 * factor), int(400 * factor)] and not ink[int(200 * factor), int(890 * factor)]

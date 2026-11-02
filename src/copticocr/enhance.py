@@ -18,7 +18,9 @@ from PIL import Image, ImageFilter
 SPECK = 0.004  # of the letter height squared: ink shapes smaller than this are specks
 EDGE = 0.03  # of the page size: the margin where thin slivers are taken for the paper's edge
 BATCH = 50  # pages held in memory before they are appended to the file
-FAINTEST = 0.12  # the palest print taken for ink: this much darker than the paper
+FAINTEST = 0.06  # the palest print taken for ink: this much darker than the paper
+GRAIN_DEPTH = 2.5  # how far below the ink, in the grain's spread, its darkest pixel lies
+PALE = 0.3  # of the page's darkest print (its contrast): paler marks are frames and shading, not print
 PINHOLE = 0.0012  # of the letter height squared: white holes this small inside ink are scanning faults
 # Memory of one page being enhanced: a worker process's own (Python and its libraries) plus
 # about this much per pixel at the tracing resolution (measured: 144 MB at 2400 px wide,
@@ -128,16 +130,31 @@ def _even_ink(level_map: np.ndarray) -> None:
     the darkest ink nearby is found too; cut at 0.5 afterwards, every stroke is cut halfway
     between its own ink and its paper, which is where its edge is: faint print comes out whole,
     and no stroke comes out bolder than printed. Where there is no print nearby the stretch is
-    held back (FAINTEST), so paper grain stays paper.
+    held back, so paper grain stays paper; so are marks far paler than the page's own print
+    (PALE): the light frames, boxes and shading of web pages and modern books, which stretched
+    would come out as heavy black bars.
     """
-    steady = Image.fromarray(np.clip(level_map * 200, 0, 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(1))
-    # The darkest pixel of each 8×8 block (an average would pale thin strokes), then the
-    # darkest within a line's reach, spread smoothly.
+    # The darkest pixel of each 8×8 block, then the darkest within a line's reach, spread
+    # smoothly. Not steadied first: blurring or averaging would pale thin strokes, so they would
+    # be cut too far out and come out bolder; grain can only make the ink look darker, which
+    # errs the safe way (a hair thinner).
     h, w = level_map.shape
-    blocks = np.asarray(steady)[:h // 8 * 8, :w // 8 * 8].reshape(h // 8, 8, w // 8, 8).min(axis=(1, 3))
+    steady = np.clip(level_map * 200, 0, 255).astype(np.uint8)
+    blocks = steady[:h // 8 * 8, :w // 8 * 8].reshape(h // 8, 8, w // 8, 8).min(axis=(1, 3))
     small = Image.fromarray(blocks).filter(ImageFilter.MinFilter(7)).filter(ImageFilter.GaussianBlur(3))
     ink = np.asarray(small.resize((w, h), Image.BILINEAR), np.float32) / 200
-    np.clip(ink, 0.0, 1.0 - FAINTEST, out=ink)
+    # On a grainy scan the darkest pixel is darker than the ink by the grain's depth: allowed
+    # for, measured on the paper (which is near 1 once evened out).
+    paper = level_map[::4, ::4]
+    paper = paper[paper > 0.8]
+    if paper.size:
+        grain = 1.4826 * float(np.median(np.abs(paper - np.median(paper))))
+        ink += GRAIN_DEPTH * grain
+    contrast = 1.0 - blocks / 200
+    printed = contrast[contrast > FAINTEST]
+    faintest = max(FAINTEST, PALE * float(np.percentile(printed, 90))) if printed.size else FAINTEST
+    # Stretched no further than to put marks that pale exactly at the cut (0.5).
+    np.clip(ink, 0.0, 1.0 - 2 * faintest, out=ink)
     # Linear in each region: its ink -> 0, the paper (1) stays 1.
     level_map -= ink
     level_map /= 1.0 - ink
