@@ -11,6 +11,14 @@ STRINGS = {
     "help": ("مساعدة", "Help"),
     "open": ("فتح", "Open"),
     "open_tip": ("فتح ملف PDF أو صور (Ctrl+O)", "Open a PDF or images (Ctrl+O)"),
+    "close_file": ("إغلاق", "Close"),
+    "close_file_tip": ("إغلاق الملف المفتوح (Ctrl+W)", "Close the open file (Ctrl+W)"),
+    "unsaved_close": ("الصفحات المقروءة لم تُصدَّر بعد، وستضيع قراءتها وتصحيحاتك. هل تريد إغلاق الملف؟",
+                      "The pages read have not been exported; their reading and your corrections will be lost. "
+                      "Close the file anyway?"),
+    "unsaved_open": ("الصفحات المقروءة لم تُصدَّر بعد، وستضيع قراءتها وتصحيحاتك. هل تريد فتح ملف آخر؟",
+                     "The pages read have not been exported; their reading and your corrections will be lost. "
+                     "Open another file anyway?"),
     "read_page": ("قراءة الصفحة", "Read page"),
     "read_page_tip": ("التعرف على نص الصفحة الحالية (Ctrl+R)", "Recognize the current page (Ctrl+R)"),
     "read_all": ("قراءة الكل", "Read all"),

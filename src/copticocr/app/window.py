@@ -100,6 +100,8 @@ class MainWindow(QMainWindow):
 
     def _build_actions(self) -> None:
         self.open_action = self._action("open", self.open_dialog, QKeySequence.Open, "open", "open_tip")
+        self.close_action = self._action("close_file", self.close_document, QKeySequence.Close, "close",
+                                         "close_file_tip")
         self.read_action = self._action("read_page", self.read_current, "Ctrl+R", "read", "read_page_tip")
         self.read_all_action = self._action("read_all", self.read_all, "Ctrl+Shift+R", "read_all", "read_all_tip")
         self.stop_action = self._action("stop", self.stop_reading, "Esc", "stop")
@@ -154,7 +156,7 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
         menu.addAction(tr("quit"), QKeySequence.Quit, self.close)
         self.more_menu = menu
-        self.addActions([self.open_action, self.read_action, self.read_all_action, self.stop_action,
+        self.addActions([self.open_action, self.close_action, self.read_action, self.read_all_action, self.stop_action,
                          self.export_action, self.zoom_in_action, self.zoom_out_action, self.fit_action,
                          self.converted_action, self.enhanced_action, self.dark_action])
 
@@ -194,6 +196,8 @@ class MainWindow(QMainWindow):
         row.addSpacing(6)
         self.open_button = self._button("ghost", self.open_action)
         row.addWidget(self.open_button)
+        self.close_button = self._button("ghost", self.close_action)
+        row.addWidget(self.close_button)
         row.addWidget(chrome.stretch())
 
         # The work in order: read, check, export. The step to take next stands out.
@@ -235,7 +239,7 @@ class MainWindow(QMainWindow):
         self.more_button.setCursor(Qt.PointingHandCursor)
         self.more_button.setMenu(self.more_menu)
         row.addWidget(self.more_button)
-        self.header_buttons = [self.open_button]
+        self.header_buttons = [self.open_button, self.close_button]
         return header
 
     def _build_body(self) -> QWidget:
@@ -440,10 +444,13 @@ class MainWindow(QMainWindow):
         paths = [p for p in paths if p.suffix.lower() == ".pdf" or p.suffix.lower() in IMAGE_SUFFIXES]
         if not paths:
             return
+        if not self._may_leave(tr("unsaved_open")):
+            return
         self.settings.setValue("last_dir", str(paths[0].parent))
         self._stop_reader()
         if self.doc is not None:
             self.doc.close()
+        self._enhanced = {}  # the previous file's pages
         self.doc = Document(sorted(paths) if len(paths) > 1 else paths)
         self.results = [None] * len(self.doc)
         self.pending.clear()
@@ -469,6 +476,39 @@ class MainWindow(QMainWindow):
         self.pages.setCurrentRow(0)
         self._thumb_timer.start(0)
         self._update_state()
+
+    def close_document(self) -> None:
+        """Back to the start screen, ready for another file."""
+        if self.doc is None or not self._may_leave(tr("unsaved_close")):
+            return
+        self._stop_reader()
+        self.doc.close()
+        self.doc = None
+        self.results = []
+        self.current = -1
+        self._enhanced = {}
+        self._preview_wanted = None
+        self._thumb_timer.stop()
+        self.pages.blockSignals(True)  # clearing the list must not ask for page 0 of nothing
+        self.pages.clear()
+        self.pages.blockSignals(False)
+        self.view.clear()
+        self.panel.set_page(None, None)
+        for widget in (self.pages_panel, self.panel, self.floating):
+            widget.hide()
+        self.stack.setCurrentIndex(0)
+        self.doc_name.setText(tr("tagline"))
+        self.doc_name.setToolTip("")
+        self._reviewed = self._exported = False
+        self._update_state()
+
+    def _may_leave(self, question: str) -> bool:
+        """Whether the open file may be put away: asks first if pages are being read, or were
+        read and not exported (their reading and corrections would be lost)."""
+        if self.doc is None:
+            return True
+        unsaved = self.pending or (any(r is not None for r in self.results) and not self._exported)
+        return not unsaved or QMessageBox.question(self, tr("app_name"), question) == QMessageBox.Yes
 
     def dragEnterEvent(self, event) -> None:
         if event.mimeData().hasUrls():
@@ -803,6 +843,8 @@ class MainWindow(QMainWindow):
         self.read_all_action.setEnabled(has_doc and any(r is None for r in self.results))
         self.stop_action.setEnabled(busy)
         self.export_action.setEnabled(has_doc)  # enhancing pages needs no reading
+        self.close_action.setEnabled(has_doc)
+        self.close_action.setVisible(has_doc)
         for action in (self.zoom_in_action, self.zoom_out_action, self.fit_action):
             action.setEnabled(has_doc)
         page_read = has_doc and self.current >= 0 and self.results[self.current] is not None

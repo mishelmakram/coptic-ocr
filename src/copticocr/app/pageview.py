@@ -51,6 +51,10 @@ class PageView(QGraphicsView):
         self._style_lines()
 
     def clear(self) -> None:
+        appear = getattr(self, "_appear", None)
+        if appear is not None:
+            appear.stop()  # it would fade in a picture no longer in the scene
+            self._appear = None
         self.scene().clear()
         self._page, self._lines, self._result, self._selected = None, [], None, -1
 
@@ -70,9 +74,10 @@ class PageView(QGraphicsView):
             appear.setStartValue(0.0)
             appear.setEndValue(1.0)
             appear.setEasingCurve(QEasingCurve.OutCubic)
-            page = self._page
-            appear.valueChanged.connect(lambda value: page.setOpacity(value) if page.scene() else None)
+            appear.valueChanged.connect(self._page.setOpacity)
+            appear.finished.connect(lambda: setattr(self, "_appear", None))  # deleted once stopped
             appear.start(QVariantAnimation.DeleteWhenStopped)
+            self._appear = appear
         self.scene().setSceneRect(self._page.sceneBoundingRect().adjusted(-40, -40, 40, 40))
         self.set_result(result)
         if 0 <= selected < len(self._lines):
