@@ -19,8 +19,9 @@ SPECK = 0.004  # of the letter height squared: ink shapes smaller than this are 
 EDGE = 0.03  # of the page size: the margin where thin slivers are taken for the paper's edge
 BATCH = 50  # pages held in memory before they are appended to the file
 FAINTEST = 0.06  # the palest print taken for ink: this much darker than the paper
+GRAINY = 0.01  # spread of the paper's brightness above which a scan counts as grainy
 GRAIN_DEPTH = 2.5  # how far below the ink, in the grain's spread, its darkest pixel lies
-PALE = 0.3  # of the page's darkest print (its contrast): paler marks are frames and shading, not print
+PALE = 0.3  # of the page's darkest print (its contrast): marks paler than this are frames and shading
 PINHOLE = 0.0012  # of the letter height squared: white holes this small inside ink are scanning faults
 # Memory of one page being enhanced: a worker process's own (Python and its libraries) plus
 # about this much per pixel at the tracing resolution (measured: 144 MB at 2400 px wide,
@@ -78,7 +79,7 @@ def clean(image: Image.Image, level: int = 1) -> tuple[np.ndarray, float]:
     np.maximum(paper, 1.0, out=paper)
     np.divide(level_map, paper, out=level_map)
     del paper
-    _even_ink(level_map)
+    level_map = _cut_each_mark(level_map)
     if factor > 1:
         size = (round(level_map.shape[1] * factor), round(level_map.shape[0] * factor))
         level_map = np.asarray(Image.fromarray(level_map, "F").resize(size, Image.BICUBIC))
@@ -86,7 +87,7 @@ def clean(image: Image.Image, level: int = 1) -> tuple[np.ndarray, float]:
         # Steadying the gray before it is cut follows the print's own outline; blurring the
         # cut ink instead would round and thicken the letters.
         level_map = ndimage.gaussian_filter(level_map, strength.smooth * factor)
-    ink = level_map < 0.5  # halfway between ink and paper (see _even_ink)
+    ink = level_map < 0  # see _cut_each_mark
     del level_map
 
     labels, count = ndimage.label(ink, structure=np.ones((3, 3)))
@@ -97,8 +98,18 @@ def clean(image: Image.Image, level: int = 1) -> tuple[np.ndarray, float]:
     heights = np.array([s[0].stop - s[0].start for s in shapes])
     letter = float(np.median(heights[areas >= np.median(areas)]))
     drop = areas < max(4.0, SPECK * letter ** 2)
-    # Thin slivers right at the page's edges: the shadow of the paper's edge, not print.
+    # A speck-sized mark right by a letter is a dot of the script (on a small or clean scan,
+    # a pixel or two wide); only those well away from the print are specks.
     h, w = ink.shape
+    block = 8
+    near = np.concatenate([[False], ~drop])[labels][:h // block * block, :w // block * block]
+    near = near.reshape(h // block, block, w // block, block).any(axis=(1, 3))
+    near = ndimage.binary_dilation(near, iterations=max(1, round(0.5 * letter / block)))
+    for k in np.flatnonzero(drop):
+        rows, cols = shapes[k]
+        y, x = (rows.start + rows.stop) // 2 // block, (cols.start + cols.stop) // 2 // block
+        drop[k] = not near[min(y, near.shape[0] - 1), min(x, near.shape[1] - 1)]
+    # Thin slivers right at the page's edges: the shadow of the paper's edge, not print.
     for k, (rows, cols) in enumerate(shapes):
         thin = min(rows.stop - rows.start, cols.stop - cols.start) <= 0.25 * letter
         at_edge = (cols.stop <= EDGE * w or cols.start >= (1 - EDGE) * w
@@ -121,43 +132,52 @@ def clean(image: Image.Image, level: int = 1) -> tuple[np.ndarray, float]:
     return ink, factor
 
 
-def _even_ink(level_map: np.ndarray) -> None:
-    """Stretch each region of the page between its own ink (0) and its paper (1), in place.
+def _cut_each_mark(level_map: np.ndarray) -> np.ndarray:
+    """``level_map`` (paper evened out to 1) less where each pixel is cut: below 0 is ink.
 
-    With the paper evened out to 1, the ink's darkness still varies: worn or faded print, a
-    lighter colour, a photo lit unevenly. One cut for the whole page then keeps the dark
-    letters and loses the faint ones, or keeps only their cores (thin, broken strokes). So
-    the darkest ink nearby is found too; cut at 0.5 afterwards, every stroke is cut halfway
-    between its own ink and its paper, which is where its edge is: faint print comes out whole,
-    and no stroke comes out bolder than printed. Where there is no print nearby the stretch is
-    held back, so paper grain stays paper; so are marks far paler than the page's own print
-    (PALE): the light frames, boxes and shading of web pages and modern books, which stretched
-    would come out as heavy black bars.
+    Each mark (a letter, a word joined up, a dot) is cut halfway between its own darkest point
+    and the paper, which is where its edge is. One cut for the whole page cannot do this: the
+    ink's darkness varies (worn or faded print, a lighter colour, uneven lighting), and so does
+    a mark's own, since a dot or a hairline smaller than the scan's pixels never comes out as
+    dark as a full stroke. A cut set for the dark letters loses the faint ones and the dots, or
+    keeps only their cores; a cut set for the faint ones makes the dark letters bolder.
+    Marks far paler than the page's darkest print (PALE) are print only where they have a
+    letter's size and shape; long thin or large ones are the light frames, boxes and shading of
+    web pages and modern books, and stay paper, as does the grain.
     """
-    # The darkest pixel of each 8×8 block, then the darkest within a line's reach, spread
-    # smoothly. Not steadied first: blurring or averaging would pale thin strokes, so they would
-    # be cut too far out and come out bolder; grain can only make the ink look darker, which
-    # errs the safe way (a hair thinner).
-    h, w = level_map.shape
-    steady = np.clip(level_map * 200, 0, 255).astype(np.uint8)
-    blocks = steady[:h // 8 * 8, :w // 8 * 8].reshape(h // 8, 8, w // 8, 8).min(axis=(1, 3))
-    small = Image.fromarray(blocks).filter(ImageFilter.MinFilter(7)).filter(ImageFilter.GaussianBlur(3))
-    ink = np.asarray(small.resize((w, h), Image.BILINEAR), np.float32) / 200
-    # On a grainy scan the darkest pixel is darker than the ink by the grain's depth: allowed
-    # for, measured on the paper (which is near 1 once evened out).
-    paper = level_map[::4, ::4]
-    paper = paper[paper > 0.8]
-    if paper.size:
-        grain = 1.4826 * float(np.median(np.abs(paper - np.median(paper))))
-        ink += GRAIN_DEPTH * grain
-    contrast = 1.0 - blocks / 200
-    printed = contrast[contrast > FAINTEST]
-    faintest = max(FAINTEST, PALE * float(np.percentile(printed, 90))) if printed.size else FAINTEST
-    # Stretched no further than to put marks that pale exactly at the cut (0.5).
-    np.clip(ink, 0.0, 1.0 - 2 * faintest, out=ink)
-    # Linear in each region: its ink -> 0, the paper (1) stays 1.
-    level_map -= ink
-    level_map /= 1.0 - ink
+    from scipy import ndimage
+
+    # A mark's darkness is read on a lightly steadied copy, so that one dark grain does not
+    # stand for the whole mark; what grain is left is allowed for, measured on the paper.
+    sample = level_map[::4, ::4]
+    paper = sample[sample > 0.8]
+    grain = 1.4826 * float(np.median(np.abs(paper - np.median(paper)))) if paper.size else 0.0
+    # Only a grainy scan is steadied: on a clean one (a screenshot) it would pale hairlines and
+    # dots, which would then come out bolder.
+    steady = ndimage.gaussian_filter(level_map, 0.7) if grain > GRAINY else level_map
+    sample = steady[::4, ::4]
+    paper = sample[sample > 0.8]
+    grain = 1.4826 * float(np.median(np.abs(paper - np.median(paper)))) if paper.size else 0.0
+    dark = 1.0 - float(np.percentile(sample, 0.5))  # the page's darkest print
+    faintest = max(FAINTEST, PALE * dark)
+    marks, count = ndimage.label(level_map < 1.0 - faintest / 2)
+    if count == 0:
+        return level_map
+    peak = np.asarray(ndimage.minimum(steady, marks, np.arange(1, count + 1)), np.float32)
+    del steady
+    peak = np.minimum(peak + GRAIN_DEPTH * grain, 1.0)
+    # A pale mark is still print where it has a letter's size and shape (faded print fades
+    # unevenly); frames, rules, bands and shading are long and thin, or large.
+    boxes = ndimage.find_objects(marks)
+    heights = np.array([b[0].stop - b[0].start for b in boxes])
+    widths = np.array([b[1].stop - b[1].start for b in boxes])
+    strong = peak <= 1.0 - faintest
+    letter = float(np.median(heights[strong & (heights > 2)])) if np.any(strong & (heights > 2)) else 20.0
+    long_side, short_side = np.maximum(heights, widths), np.minimum(heights, widths)
+    frame = ((long_side > 2 * letter) & (short_side < 0.25 * letter)) | (heights > 3 * letter) | (widths > 15 * letter)
+    printed = strong | ((peak <= 1.0 - FAINTEST) & ~frame)
+    cut = np.where(printed, (peak + 1.0) / 2, 0.0).astype(np.float32)  # not print: paper
+    return level_map - np.concatenate([np.zeros(1, np.float32), cut])[marks]
 
 
 def preview(image: Image.Image, level: int = 1) -> Image.Image:
