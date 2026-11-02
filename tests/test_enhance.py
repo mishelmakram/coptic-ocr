@@ -50,3 +50,32 @@ def test_enhanced_pdf(tmp_path):
     with pymupdf.open(tmp_path / "out.pdf") as pdf:
         assert not pdf[0].get_images()           # drawn as curves, no picture
         assert len(pdf[0].get_drawings()) >= 1
+
+
+def strokes(ink_levels):
+    """White paper with a row of 6 px strokes 40 px tall, each printed at its own darkness."""
+    image = Image.new("L", (900, 300), 235)
+    draw = ImageDraw.Draw(image)
+    for k, level in enumerate(ink_levels):
+        for x in range(60 + 200 * k, 200 + 200 * k, 20):
+            draw.rectangle((x, 130, x + 5, 169), fill=level)
+    return image
+
+
+def test_faded_print_comes_out_whole_and_no_bolder():
+    image = strokes([20, 150, 200])  # dark, faded, very faded
+    for level in (1, 2, 3):
+        ink, factor = clean(image, level)
+        for k in range(3):
+            x = 60 + 200 * k
+            row = ink[int(150 * factor), int((x - 7) * factor):int((x + 13) * factor)]
+            assert abs(row.sum() / factor - 6) <= 1.5, (level, k)   # each stroke 6 px, as printed
+            assert ink[int(131 * factor):int(168 * factor), int((x + 3) * factor)].all()  # unbroken
+
+
+def test_levels_keep_thick_strokes_solid():
+    image = Image.new("L", (1000, 600), 240)
+    ImageDraw.Draw(image).rectangle((100, 200, 900, 260), fill=20)  # a heavy rule or bold stroke
+    for level in (1, 2, 3):
+        ink, factor = clean(image, level)
+        assert ink[int(230 * factor), int(150 * factor):int(850 * factor)].all(), level  # not hollowed

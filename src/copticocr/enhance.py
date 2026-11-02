@@ -18,6 +18,7 @@ from PIL import Image, ImageFilter
 SPECK = 0.004  # of the letter height squared: ink shapes smaller than this are specks
 EDGE = 0.03  # of the page size: the margin where thin slivers are taken for the paper's edge
 BATCH = 50  # pages held in memory before they are appended to the file
+FAINTEST = 0.12  # the palest print taken for ink: this much darker than the paper
 PINHOLE = 0.0012  # of the letter height squared: white holes this small inside ink are scanning faults
 # Memory of one page being enhanced: a worker process's own (Python and its libraries) plus
 # about this much per pixel at the tracing resolution (measured: 144 MB at 2400 px wide,
@@ -61,13 +62,13 @@ def clean(image: Image.Image, level: int = 1) -> tuple[np.ndarray, float]:
     strength = LEVELS[level]
     gray = image.convert("L")
     factor = min(6.0, max(1.0, strength.work_width / gray.width))
-    if factor > 1.05:
-        gray = gray.resize((round(gray.width * factor), round(gray.height * factor)), Image.BICUBIC)
-    else:
+    if factor <= 1.05:
         factor = 1.0
 
     # The paper: the page with its text closed over, smoothed. Dividing by it evens out
-    # shading, yellowing and uneven lighting in photos.
+    # shading, yellowing and uneven lighting in photos. Measured on the scan as it is, before
+    # any enlarging: measured on an enlarged page, its reach would shrink with the level, until
+    # thick strokes and bold titles were taken for paper and hollowed out.
     paper = gray.reduce(8).filter(ImageFilter.MaxFilter(7)).filter(ImageFilter.GaussianBlur(4))
     paper = np.asarray(paper.resize(gray.size, Image.BILINEAR), dtype=np.float32)
     level_map = np.asarray(gray, dtype=np.float32)
@@ -75,11 +76,15 @@ def clean(image: Image.Image, level: int = 1) -> tuple[np.ndarray, float]:
     np.maximum(paper, 1.0, out=paper)
     np.divide(level_map, paper, out=level_map)
     del paper
+    _even_ink(level_map)
+    if factor > 1:
+        size = (round(level_map.shape[1] * factor), round(level_map.shape[0] * factor))
+        level_map = np.asarray(Image.fromarray(level_map, "F").resize(size, Image.BICUBIC))
     if strength.smooth:
         # Steadying the gray before it is cut follows the print's own outline; blurring the
         # cut ink instead would round and thicken the letters.
         level_map = ndimage.gaussian_filter(level_map, strength.smooth * factor)
-    ink = level_map < _otsu(level_map)
+    ink = level_map < 0.5  # halfway between ink and paper (see _even_ink)
     del level_map
 
     labels, count = ndimage.label(ink, structure=np.ones((3, 3)))
@@ -114,22 +119,28 @@ def clean(image: Image.Image, level: int = 1) -> tuple[np.ndarray, float]:
     return ink, factor
 
 
-def _otsu(values: np.ndarray) -> float:
-    """The level splitting ``values`` (paper near 1, ink below) into two classes best.
+def _even_ink(level_map: np.ndarray) -> None:
+    """Stretch each region of the page between its own ink (0) and its paper (1), in place.
 
-    Kept between 0.3 and 0.9: paper is near 1 once evened out, so a cut outside that
-    range is a failed estimate (it would turn the whole page into ink, or lose faint print).
+    With the paper evened out to 1, the ink's darkness still varies: worn or faded print, a
+    lighter colour, a photo lit unevenly. One cut for the whole page then keeps the dark
+    letters and loses the faint ones, or keeps only their cores (thin, broken strokes). So
+    the darkest ink nearby is found too; cut at 0.5 afterwards, every stroke is cut halfway
+    between its own ink and its paper, which is where its edge is: faint print comes out whole,
+    and no stroke comes out bolder than printed. Where there is no print nearby the stretch is
+    held back (FAINTEST), so paper grain stays paper.
     """
-    hist, edges = np.histogram(values, bins=256, range=(0.0, 1.2))
-    hist = hist.astype(np.float64)
-    centers = (edges[:-1] + edges[1:]) / 2
-    weight = np.cumsum(hist)
-    mean = np.cumsum(hist * centers)
-    total, total_mean = weight[-1], mean[-1]
-    with np.errstate(divide="ignore", invalid="ignore"):
-        between = (total_mean * weight / total - mean) ** 2 / (weight * (total - weight))
-    between[~np.isfinite(between)] = -1
-    return float(np.clip(centers[int(np.argmax(between))], 0.3, 0.9))
+    steady = Image.fromarray(np.clip(level_map * 200, 0, 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(1))
+    # The darkest pixel of each 8×8 block (an average would pale thin strokes), then the
+    # darkest within a line's reach, spread smoothly.
+    h, w = level_map.shape
+    blocks = np.asarray(steady)[:h // 8 * 8, :w // 8 * 8].reshape(h // 8, 8, w // 8, 8).min(axis=(1, 3))
+    small = Image.fromarray(blocks).filter(ImageFilter.MinFilter(7)).filter(ImageFilter.GaussianBlur(3))
+    ink = np.asarray(small.resize((w, h), Image.BILINEAR), np.float32) / 200
+    np.clip(ink, 0.0, 1.0 - FAINTEST, out=ink)
+    # Linear in each region: its ink -> 0, the paper (1) stays 1.
+    level_map -= ink
+    level_map /= 1.0 - ink
 
 
 def preview(image: Image.Image, level: int = 1) -> Image.Image:
