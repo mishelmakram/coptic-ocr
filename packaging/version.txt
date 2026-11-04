@@ -1,13 +1,13 @@
 VSVersionInfo(
-  ffi=FixedFileInfo(filevers=(0, 2, 1, 0), prodvers=(0, 2, 1, 0)),
+  ffi=FixedFileInfo(filevers=(0, 2, 2, 0), prodvers=(0, 2, 2, 0)),
   kids=[
     StringFileInfo([StringTable("040904B0", [
       StringStruct("CompanyName", "Mishel Makram"),
       StringStruct("FileDescription", "Coptic OCR"),
-      StringStruct("FileVersion", "0.2.1"),
+      StringStruct("FileVersion", "0.2.2"),
       StringStruct("LegalCopyright", "Copyright © 2026 Mishel Makram. AGPL-3.0-or-later"),
       StringStruct("ProductName", "Coptic OCR"),
-      StringStruct("ProductVersion", "0.2.1")])]),
+      StringStruct("ProductVersion", "0.2.2")])]),
     VarFileInfo([VarStruct("Translation", [1033, 1200])])
   ]
 )
