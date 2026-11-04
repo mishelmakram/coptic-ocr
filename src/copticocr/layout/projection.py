@@ -53,6 +53,74 @@ def remove_rules(ink: np.ndarray, vertical: float = 0.08, horizontal: float = 0.
     return ink & ~_spread(_spread(rules, 1, 1), 0, 1)
 
 
+def letter_height(ink: np.ndarray) -> float:
+    """The typical height of a page's letters, in pixels."""
+    from scipy import ndimage
+
+    labels, count = ndimage.label(ink, structure=np.ones((3, 3)))
+    if count == 0:
+        return 0.0
+    heights = np.array([s[0].stop - s[0].start for s in ndimage.find_objects(labels)])
+    areas = np.bincount(labels.ravel())[1:]
+    return float(np.median(heights[areas >= np.median(areas)]))
+
+
+def remove_ornaments(clean: np.ndarray, ink: np.ndarray, letter: float, size: float = 2.5) -> np.ndarray:
+    """``clean`` (the ink without rules) without a band of ornament: crosses and tiles around a
+    title over the columns. Meant for the page's head only: in the text, large capitals
+    would be taken for it.
+
+    Ornaments are drawn as several shapes far taller than the page's letters (``letter``). They
+    are found whole in ``ink`` (in ``clean`` their long arms went with the rules, leaving
+    pieces), and every mark close to them (the small tiles between the crosses) goes too."""
+    from scipy import ndimage
+
+    labels, count = ndimage.label(ink, structure=np.ones((3, 3)))
+    if count == 0 or not letter:
+        return clean
+    shapes = ndimage.find_objects(labels)
+    heights = np.array([s[0].stop - s[0].start for s in shapes])
+    widths = np.array([s[1].stop - s[1].start for s in shapes])
+    big = (heights > size * letter) & (widths > 0.5 * size * letter)
+    if big.sum() < 3:
+        return clean
+    ornament = np.concatenate([[False], big])[labels]
+    del labels
+    near = ndimage.binary_dilation(ornament[::4, ::4], iterations=max(1, round(1.25 * letter / 4)))
+    pieces, count = ndimage.label(clean, structure=np.ones((3, 3)))
+    drop = np.zeros(count + 1, bool)
+    drop[np.unique(pieces[ornament])] = True  # the pieces of the ornament itself
+    for k, (rows, cols) in enumerate(ndimage.find_objects(pieces), 1):
+        y, x = (rows.start + rows.stop) // 2 // 4, (cols.start + cols.stop) // 2 // 4
+        drop[k] |= near[min(y, near.shape[0] - 1), min(x, near.shape[1] - 1)]
+    drop[0] = False
+    return clean & ~drop[pieces]
+
+
+def without_tall_shapes(ink: np.ndarray, box: Box, size: float = 1.8) -> np.ndarray:
+    """``ink`` without what in ``box`` stands taller than ``size`` of its lines: a drop cap two or
+    three lines high, a vignette. Left in, it would join those lines into one.
+
+    Some are drawn whole, others as an outline of many small pieces, so pieces that all but
+    touch are taken together (letters of one line are, but stay a line high)."""
+    from scipy import ndimage
+
+    lines = find_lines(ink, box)
+    if len(lines) < 3:
+        return ink
+    line = float(np.median([b.height for b in lines]))
+    region = ink[box.y0:box.y1, box.x0:box.x1]
+    joined = ndimage.binary_dilation(region, iterations=max(1, round(0.035 * line)))
+    labels, count = ndimage.label(joined, structure=np.ones((3, 3)))
+    heights = np.array([s[0].stop - s[0].start for s in ndimage.find_objects(labels)])
+    tall = np.concatenate([[False], heights > size * line])
+    if not tall.any():
+        return ink
+    out = ink.copy()
+    out[box.y0:box.y1, box.x0:box.x1] &= ~tall[labels]
+    return out
+
+
 def _spread(mask: np.ndarray, axis: int, n: int) -> np.ndarray:
     """``mask`` grown by ``n`` pixels both ways along ``axis``."""
     out = mask.copy()
@@ -80,26 +148,58 @@ def widest_gap(profile: np.ndarray, lo: int, hi: int, limit: float) -> tuple[int
 
 
 def split_columns(ink: np.ndarray, lo: float = 0.35, hi: float = 0.75) -> tuple[Box, Box] | None:
-    """Left and right column of a two-column page, split at the widest blank gutter."""
+    """Left and right column of a two-column page, split at the widest blank gutter.
+
+    What runs across the gutter above the columns (an ornament, a heading, titles) is looked
+    past: the gutter is sought in the text below it, and the columns then begin there; what is
+    above them is the page's head, read across the full width (``page_head``)."""
     height, width = ink.shape
     rows = np.flatnonzero(ink.sum(1) > 0)
     cols = np.flatnonzero(ink.sum(0) > 0)
     if not len(rows):
         return None
+    top, bottom = int(rows[0]), int(rows[-1]) + 1
+    gap = _gutter(ink, lo, hi)
+    if gap is None:
+        bands = runs(ink.any(1))
+        for start, _ in bands[1:]:
+            if start > 0.6 * height:
+                break
+            below = sum(s >= start for s, _ in bands)
+            if below >= 6 and (gap := _gutter(ink[start:], lo, hi)) is not None:
+                top = int(start)
+                break
+    if gap is None:
+        return None
+    return Box(int(cols[0]), top, int(gap[0]), bottom), Box(int(gap[1]), top, int(cols[-1]) + 1, bottom)
+
+
+def page_head(ink: np.ndarray, columns: tuple[Box, Box]) -> Box | None:
+    """The full-width part of the page above its columns (see ``split_columns``), if any, as far
+    as ``ink`` shows it."""
+    rows = np.flatnonzero(ink[:columns[0].y0].any(1))
+    if not len(rows):
+        return None
+    return Box(columns[0].x0, int(rows[0]), columns[1].x1, int(rows[-1]) + 1)
+
+
+def _gutter(ink: np.ndarray, lo: float, hi: float) -> tuple[int, int] | None:
+    """[start, end) of the blank strip between two columns, if there is one."""
+    height, width = ink.shape
     profile = smooth(ink.sum(0).astype(float), 5)
     gap = widest_gap(profile, int(width * lo), int(width * hi), height * 0.002)
-    if gap is None or gap[1] - gap[0] < width * 0.005:
-        # A title or heading may run across the gutter: look instead for a strip that
-        # is blank in nearly every line of text, and somewhat wider than a word space.
-        bands = runs(ink.any(1))
-        if len(bands) < 4:
-            return None
-        crossed = np.mean([ink[s:e].any(0) for s, e in bands], axis=0)
-        gap = widest_gap(smooth(crossed, 5), int(width * lo), int(width * hi), 0.15)
-        if gap is None or gap[1] - gap[0] < width * 0.015:
-            return None
-    top, bottom = int(rows[0]), int(rows[-1]) + 1
-    return Box(int(cols[0]), top, int(gap[0]), bottom), Box(int(gap[1]), top, int(cols[-1]) + 1, bottom)
+    if gap is not None and gap[1] - gap[0] >= width * 0.005:
+        return gap
+    # A title or heading may run across the gutter: look instead for a strip that
+    # is blank in nearly every line of text, and somewhat wider than a word space.
+    bands = runs(ink.any(1))
+    if len(bands) < 4:
+        return None
+    crossed = np.mean([ink[s:e].any(0) for s, e in bands], axis=0)
+    gap = widest_gap(smooth(crossed, 5), int(width * lo), int(width * hi), 0.15)
+    if gap is None or gap[1] - gap[0] < width * 0.015:
+        return None
+    return gap
 
 
 def split_further(ink: np.ndarray, box: Box, page_width: int, depth: int = 3) -> list[Box]:
@@ -179,6 +279,7 @@ def find_lines(ink: np.ndarray, box: Box, min_gap: int = 2) -> list[Box]:
         lines.append([s, e])
     if pending is not None and lines and pending[0] - lines[-1][1] < typical * 0.3:
         lines[-1][1] = pending[1]
+    lines = _split_tall(lines, region.sum(1))
 
     out = []
     for s, e in lines:
@@ -188,6 +289,32 @@ def find_lines(ink: np.ndarray, box: Box, min_gap: int = 2) -> list[Box]:
                 and pieces[-1][0] - pieces[-2][1] >= e - s:
             pieces.pop()
         out.append(Box(box.x0 + int(pieces[0][0]), box.y0 + int(s), box.x0 + int(pieces[-1][1]), box.y0 + int(e)))
+    return out
+
+
+def _split_tall(lines: list[list[int]], profile: np.ndarray, size: float = 1.7) -> list[list[int]]:
+    """Lines far taller than the rest cut in two where they hold least ink: two lines that a
+    stray mark (a flourish, a smudge) bridges leave no row blank between them."""
+    if len(lines) < 3:
+        return lines
+    heights = np.array([e - s for s, e in lines])
+    typical = float(np.median(heights[heights >= np.median(heights)]))  # rows of overlines alone do not count
+    out: list[list[int]] = []
+    pending = list(lines)
+    while pending:
+        s, e = pending.pop(0)
+        if e - s <= size * typical:
+            out.append([s, e])
+            continue
+        lo, hi = s + int(0.6 * typical), e - int(0.6 * typical)  # each part a line high
+        if hi <= lo:
+            out.append([s, e])
+            continue
+        cut = lo + int(np.argmin(profile[lo:hi]))
+        if profile[cut] > 0.1 * profile[s:e].max():
+            out.append([s, e])  # no clear valley: one line (a tall title, marks above and below)
+            continue
+        pending[:0] = [[s, cut], [cut, e]]
     return out
 
 

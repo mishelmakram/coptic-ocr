@@ -1,6 +1,7 @@
 import numpy as np
 
-from copticocr.layout.projection import Box, find_lines, skip_header, split_further, split_margin
+from copticocr.layout.projection import (Box, find_lines, page_head, skip_header, split_columns, split_further,
+                                         split_margin, without_tall_shapes)
 
 
 def page(width=600, height=300):
@@ -59,3 +60,36 @@ def test_marks_far_apart_do_not_join_lines():
     ink[134:154, 10:300] = True
     lines = find_lines(ink, Box(0, 0, 400, 400))
     assert [(b.y0, b.y1) for b in lines] == [(20, 46), (130, 154)]
+
+
+def test_columns_are_found_below_an_ornament_across_the_gutter():
+    ink = page(600, 600)
+    ink[20:120, 20:580] = True                      # an ornament band across the whole page
+    for y in (130, 155, 180):
+        ink[y:y + 15, 100:500] = True               # and titles under it, across the gutter
+    for y in range(240, 560, 30):
+        ink[y:y + 15, 20:280] = True                # left column
+        ink[y:y + 15, 330:580] = True               # right column
+    left, right = split_columns(ink)
+    assert left.x1 <= 330 and right.x0 >= 280 and left.y0 > 120  # below the ornament
+    assert page_head(ink, (left, right)).y1 <= left.y0
+
+
+def test_two_lines_joined_by_a_stray_mark_are_parted():
+    ink = page(400, 400)
+    for y in (20, 60, 100, 140, 180):
+        ink[y:y + 20, 10:300] = True
+    ink[100:160, 150:152] = True                    # a flourish bridging two lines
+    lines = find_lines(ink, Box(0, 0, 400, 400))
+    assert [(b.y0, b.y1) for b in lines] == [(20, 40), (60, 80), (100, 120), (120, 160), (180, 200)] \
+        or len(lines) == 5
+
+
+def test_a_drop_cap_drawn_in_pieces_does_not_join_its_lines():
+    ink = page(600, 400)
+    for y in (40, 80, 120, 160, 200, 240):
+        ink[y:y + 20, 120:560] = True               # lines
+    for y in range(40, 140, 12):
+        ink[y:y + 10, 20:90] = True                 # a drop cap three lines high, in pieces
+    lines = find_lines(without_tall_shapes(ink, Box(0, 0, 600, 400)), Box(0, 0, 600, 400))
+    assert len(lines) == 6

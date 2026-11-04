@@ -19,14 +19,17 @@ import numpy as np
 import pymupdf
 from PIL import Image
 
-from .layout.projection import (Box, binarize, find_lines, remove_rules, skip_header,
-                                split_columns, split_further, split_margin, text_left_edge)
+from .layout.projection import (Box, binarize, find_lines, letter_height, remove_ornaments, remove_rules,
+                                skip_header, page_head, split_columns, split_further, split_margin,
+                                text_left_edge, without_tall_shapes)
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
 PDF_DPI = 300
 PAD = 6  # pixels kept around a line's ink when it is cut out
+HEAD_INK = 170  # gray level below which a pixel counts as ink in the page's head: titles may be printed grey
 COPTIC_MIN_CONFIDENCE = 0.6  # a column whose typical line reads worse is not Coptic
 COPTIC_LINE_CONFIDENCE = 0.85  # mean letter confidence below which a line in a Coptic column is not Coptic
+COPTIC_SURE_SHARE = 0.35  # a column with this share of lines read surely as Coptic is Coptic
 ARABIC_MIN_CONFIDENCE = 0.5  # an Arabic reading less certain than this is left empty (an ornament, a stain)
 
 
@@ -129,24 +132,39 @@ def find_text_lines(gray: np.ndarray) -> list[list[TextLine]]:
     ink = binarize(gray)
     clean = remove_rules(ink)
     columns = split_columns(clean)
+    head = None
     if columns is None:
         rows, cols = np.flatnonzero(clean.any(1)), np.flatnonzero(clean.any(0))
         if not len(rows):
             return []
         columns = (Box(int(cols[0]), int(rows[0]), int(cols[-1]) + 1, int(rows[-1]) + 1),)
+    else:
+        # Above the columns: titles, maybe grey, maybe within an ornament.
+        head_ink = binarize(gray, HEAD_INK)
+        head_clean = remove_rules(head_ink)
+        head = page_head(head_clean, columns)
+        if head is not None:
+            head_clean = remove_ornaments(head_clean, head_ink, letter_height(clean))
     columns = [part for column in columns for part in split_further(clean, column, clean.shape[1])]
     result = []
     for number, column in enumerate(columns):
         column = skip_header(ink, column)  # the rule under a running head is in ``ink`` only
-        boxes = find_lines(clean, column)
+        text_ink = without_tall_shapes(clean, column)
+        boxes = find_lines(text_ink, column)
         if not boxes:
             continue
         left = text_left_edge(boxes)
         lines = []
         for box in boxes:
-            label, text = split_margin(clean, box, left)
+            label, text = split_margin(text_ink, box, left)
             lines.append(TextLine(text, "coptic", label=label, column=number))
         result.append(lines)
+    if head is not None:
+        # Titles over the columns, read whole; numbered with the first column, as a title joined
+        # across both columns is.
+        lines = [TextLine(box, "coptic", column=0) for box in find_lines(head_clean, head)]
+        if lines:
+            result.insert(0, lines)
     return result
 
 
@@ -229,8 +247,11 @@ class Engine:
         for column in columns:
             self._read_lines(gray, column)
             # The weakest letter of a Coptic line is still read well; Arabic lines are guesswork.
-            coptic_column = np.median([line.confidence if line.text else 0.0 for line in column]) \
-                >= COPTIC_MIN_CONFIDENCE
+            # Titles, ornaments and a drop cap at the top of a Coptic column read badly too, so a
+            # good share of lines read surely also makes it Coptic.
+            confidences = np.array([line.confidence if line.text else 0.0 for line in column])
+            coptic_column = np.median(confidences) >= COPTIC_MIN_CONFIDENCE \
+                or np.mean(confidences >= COPTIC_LINE_CONFIDENCE) >= COPTIC_SURE_SHARE
             for line in column:
                 # Within a Coptic column a line read as guesswork is something else: an Arabic
                 # title running across both columns, an ornament.
