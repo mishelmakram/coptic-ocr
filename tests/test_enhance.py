@@ -109,3 +109,30 @@ def test_the_eye_of_a_small_blurred_letter_stays_open():
     for x in range(40, 260, 40):
         assert ink[int(51 * factor), int((x + 4.5) * factor)]          # the ring
         assert not ink[round(55 * factor), round((x + 5) * factor)], x  # its eye
+
+
+def test_a_letter_at_the_edge_of_the_page_stays():
+    """An alef ending a line close to the right edge is thin like the shadow of the paper's
+    edge, but only a letter high."""
+    image = Image.new("L", (600, 300), 250)
+    draw = ImageDraw.Draw(image)
+    for x in range(100, 560, 16):
+        draw.rectangle((x, 140, x + 9, 159), fill=20)  # the line
+    draw.rectangle((590, 136, 592, 159), fill=20)      # its alef, 8 px from the edge
+    draw.rectangle((0, 0, 4, 299), fill=60)            # the shadow of the paper's edge
+    ink, factor = clean(image, 1)
+    assert ink[int(150 * factor), int(591 * factor)]
+    assert not ink[int(150 * factor), int(2 * factor)]
+
+
+def test_the_hairline_of_a_letter_stays():
+    """On a small scan the thin arm of ⲅ comes out paler than its stem; it is part of the letter."""
+    image = Image.new("L", (300, 120), 245)
+    draw = ImageDraw.Draw(image)
+    for x in range(40, 260, 40):
+        draw.rectangle((x, 40, x + 3, 70), fill=15)       # the stem
+        draw.rectangle((x + 4, 40, x + 16, 40), fill=15)  # its arm, 1 px
+    image = image.filter(ImageFilter.GaussianBlur(1.0))
+    ink, factor = clean(image, 1)
+    for x in range(40, 260, 40):
+        assert ink[round(40.5 * factor), round((x + 12) * factor)], x

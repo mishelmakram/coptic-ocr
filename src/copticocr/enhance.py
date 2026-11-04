@@ -110,9 +110,10 @@ def clean(image: Image.Image, level: int = 1) -> tuple[np.ndarray, float]:
         rows, cols = shapes[k]
         y, x = (rows.start + rows.stop) // 2 // block, (cols.start + cols.stop) // 2 // block
         drop[k] = not near[min(y, near.shape[0] - 1), min(x, near.shape[1] - 1)]
-    # Thin slivers right at the page's edges: the shadow of the paper's edge, not print.
+    # Thin slivers right at the page's edges: the shadow of the paper's edge, not print. They run
+    # along the edge; a letter at the end of a line close to the edge (an alef) is a letter high.
     for k, (rows, cols) in enumerate(shapes):
-        thin = min(rows.stop - rows.start, cols.stop - cols.start) <= 0.25 * letter
+        thin = min(rows.stop - rows.start, cols.stop - cols.start) <= 0.25 * letter             and max(rows.stop - rows.start, cols.stop - cols.start) > 3 * letter
         at_edge = (cols.stop <= EDGE * w or cols.start >= (1 - EDGE) * w
                    or rows.stop <= EDGE * h or rows.start >= (1 - EDGE) * h)
         drop[k] |= thin and at_edge
@@ -178,8 +179,25 @@ def _cut_each_mark(level_map: np.ndarray) -> np.ndarray:
     frame = ((long_side > 2 * letter) & (short_side < 0.25 * letter)) | (heights > 3 * letter) | (widths > 15 * letter)
     printed = strong | ((peak <= 1.0 - FAINTEST) & ~frame)
     cut = np.where(printed, (peak + 1.0) / 2, 0.0).astype(np.float32)  # not print: paper
+    in_print = np.concatenate([[False], printed])[marks]
     cut = np.concatenate([np.zeros(1, np.float32), cut])[marks]
     del marks
+
+    # A hairline of a letter (the arm of ⲅ, a thin join in Arabic) is paler than the letter's
+    # thick strokes on a small or blurred scan, so cut with them it would be lost. Each is cut
+    # halfway between the paper around it and its own darkest point. Only within print: the
+    # thin lines of frames stay paper.
+    around = ndimage.grey_closing(level_map, size=(3, 3))  # the paper with such hairlines erased
+    thin = around - level_map
+    lines, count = ndimage.label((thin > FAINTEST) & in_print & (level_map >= cut), structure=np.ones((3, 3)))
+    if count:
+        index = np.arange(1, count + 1)
+        darkest = np.asarray(ndimage.minimum(level_map, lines, index), np.float32)
+        depth = np.asarray(ndimage.maximum(thin, lines, index), np.float32)
+        kept = np.concatenate([[False], depth > max(WHITE_MARK, GRAIN_DEPTH * grain)])
+        where = kept[lines]
+        cut[where] = np.maximum(cut[where], (around[where] + darkest[lines[where] - 1]) / 2)
+    del in_print, lines
 
     # The same the other way round: the eyes of letters (ق ف و ط ه, ⲁ ϧ) and the narrow gaps
     # between teeth (س ش) are white marks inside the ink. On a small or blurred scan they are a
