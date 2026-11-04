@@ -7,15 +7,15 @@ import os
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, QSize, Qt, QTimer
-from PySide6.QtGui import QAction, QActionGroup, QColor, QFont, QIcon, QKeySequence, QPixmap
+from PySide6.QtCore import QSettings, QSize, Qt, QTimer, QUrl
+from PySide6.QtGui import QAction, QActionGroup, QColor, QDesktopServices, QFont, QIcon, QKeySequence, QPixmap
 from PySide6.QtWidgets import (QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QListWidget,
                                QListWidgetItem, QMainWindow, QMenu, QMessageBox, QProgressBar, QProgressDialog,
                                QPushButton, QSplitter, QStackedWidget, QToolButton, QVBoxLayout, QWidget)
 
 from .. import book, enhance, export
 from ..pipeline import IMAGE_SUFFIXES, Document, PageResult
-from . import chrome, icons, theme as themes
+from . import chrome, icons, theme as themes, update
 from .export_dialog import ExportDialog
 from .i18n import language, tr
 from .pageview import PageView, to_pixmap
@@ -84,6 +84,8 @@ class MainWindow(QMainWindow):
         geometry = self.settings.value("geometry")
         if geometry is not None:
             self.restoreGeometry(geometry)
+        update.clear_installed()
+        QTimer.singleShot(8000, self.check_for_update)  # once the window is up and settled
 
     # Construction -------------------------------------------------------
     def _action(self, key: str, slot, shortcut=None, icon_name: str | None = None, tip: str | None = None,
@@ -151,6 +153,13 @@ class MainWindow(QMainWindow):
         self.cpu_action.setChecked(self.settings.value("cpu", False, bool))
         self.cpu_action.toggled.connect(self._set_cpu)
         menu.addSeparator()
+        self.auto_update_action = menu.addAction(tr("auto_update"))
+        self.auto_update_action.setCheckable(True)
+        self.auto_update_action.setChecked(self.settings.value("auto_update", True, bool))
+        self.auto_update_action.toggled.connect(lambda on: self.settings.setValue("auto_update", on))
+        menu.addAction(tr("check_update"), lambda: self.check_for_update(asked=True))
+        self.update_action = menu.addAction(tr("update_now"), self.update_now)
+        self.update_action.setVisible(False)
         menu.addAction(tr("language"), self.switch_language)
         menu.addAction(tr("about"), lambda: QMessageBox.about(self, tr("about"), tr("about_text")))
         menu.addSeparator()
@@ -931,12 +940,75 @@ class MainWindow(QMainWindow):
         self.settings.setValue("guide", on)
         self._update_guide()
 
+    # Updates ------------------------------------------------------------
+    def check_for_update(self, asked: bool = False) -> None:
+        """Look for a newer release on GitHub, on a thread. Unasked, at most once a day and only
+        if automatic updates are on; the installed copy then downloads it, ready to install."""
+        if getattr(self, "_update_job", None) is not None:
+            return
+        now = time.time()
+        if not asked:
+            if not self.auto_update_action.isChecked():
+                return
+            if now - float(self.settings.value("update_checked", 0)) < update.CHECK_EVERY:
+                return
+        installed = update.installed_copy()
+        found: dict = {}
+
+        def work(_report) -> bool:
+            release = update.latest_release()
+            found["tag"] = release.get("tag_name", "")
+            asset = update.installer_asset(release)
+            if update.is_newer(found["tag"]) and asset is not None and installed:
+                found["setup"] = update.download(asset, update.updates_folder())
+            return True
+
+        def finished(_completed: bool, error: str) -> None:
+            self._update_job = None
+            if error:
+                if asked:
+                    self.notify(tr("update_failed"))
+                return
+            self.settings.setValue("update_checked", now)
+            tag = found.get("tag", "")
+            if not update.is_newer(tag):
+                if asked:
+                    self.notify(tr("update_none", update.__version__))
+            elif "setup" in found:
+                self._update_ready = found["setup"]
+                self.update_action.setText(tr("update_now_version", tag.lstrip("vV")))
+                self.update_action.setVisible(True)
+                self.notify(tr("update_ready", tag.lstrip("vV")), 4500)
+            else:  # the portable copy, or a release without an installer
+                if QMessageBox.question(self, tr("app_name"), tr("update_available", tag.lstrip("vV")))                         == QMessageBox.Yes:
+                    QDesktopServices.openUrl(QUrl(update.RELEASES_PAGE))
+
+        if asked:
+            self.notify(tr("update_checking"))
+        self._update_job = Job(work)
+        self._update_job.done.connect(finished)
+        self._update_job.start()
+
+    def update_now(self) -> None:
+        """Install the downloaded update and start the new version."""
+        if getattr(self, "_update_ready", None) is None:
+            return
+        self._relaunch = True
+        self.close()
+
     def closeEvent(self, event) -> None:
         if self.pending and QMessageBox.question(self, tr("app_name"), tr("unsaved_quit")) != QMessageBox.Yes:
+            event.ignore()
+            return
+        if getattr(self, "_relaunch", False) and not self._may_leave(tr("unsaved_update")):
+            self._relaunch = False
             event.ignore()
             return
         self.settings.setValue("geometry", self.saveGeometry())
         self._stop_reader()
         if self.doc is not None:
             self.doc.close()
+        ready = getattr(self, "_update_ready", None)
+        if ready is not None and Path(ready).exists():
+            update.install(Path(ready), relaunch=getattr(self, "_relaunch", False))
         super().closeEvent(event)

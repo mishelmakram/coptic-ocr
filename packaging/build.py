@@ -25,7 +25,14 @@ ISCC = [Path(r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe"), Path(r"C:\Program
 
 
 def version() -> str:
-    return tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+    """The version in pyproject.toml, which the program (it compares it with the releases when it
+    updates itself) and its Windows details must carry too."""
+    number = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+    program = (ROOT / "src" / "copticocr" / "__init__.py").read_text(encoding="utf-8")
+    details = (ROOT / "packaging" / "version.txt").read_text(encoding="utf-8")
+    if f'__version__ = "{number}"' not in program or f'"ProductVersion", "{number}"' not in details:
+        sys.exit(f"Set version {number} in src/copticocr/__init__.py and packaging/version.txt too.")
+    return number
 
 
 def main() -> None:

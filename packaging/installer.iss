@@ -52,7 +52,15 @@ Name: "{autodesktop}\Coptic OCR"; Filename: "{app}\CopticOCR.exe"; Tasks: deskto
 
 [Run]
 Filename: "{app}\CopticOCR.exe"; Description: "{cm:LaunchProgram,Coptic OCR}"; Flags: nowait postinstall skipifsilent
+; An update the program installed itself (app/update.py): start the new version when asked.
+Filename: "{app}\CopticOCR.exe"; Flags: nowait; Check: Relaunch
 
 [InstallDelete]
 ; Models from an earlier version, so the program does not pick an old one.
 Type: filesandordirs; Name: "{app}\models"
+
+[Code]
+function Relaunch: Boolean;
+begin
+  Result := WizardSilent and (ExpandConstant('{param:RELAUNCH|0}') = '1');
+end;

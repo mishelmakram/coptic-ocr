@@ -94,6 +94,21 @@ STRINGS = {
     "language_restart": ("ستتغير اللغة عند إعادة تشغيل البرنامج.",
                          "The language changes when the program restarts."),
     "about": ("عن البرنامج", "About"),
+    "auto_update": ("تحديث تلقائي", "Update automatically"),
+    "check_update": ("البحث عن تحديث", "Check for updates"),
+    "update_now": ("تثبيت التحديث الآن", "Install the update now"),
+    "update_now_version": ("تثبيت الإصدار {} الآن", "Install version {} now"),
+    "update_checking": ("جارٍ البحث عن تحديث…", "Checking for updates…"),
+    "update_none": ("لديك أحدث إصدار ({}).", "You have the latest version ({})."),
+    "update_failed": ("تعذّر البحث عن تحديث. تأكد من الاتصال بالإنترنت.",
+                      "Could not check for updates. Check the internet connection."),
+    "update_ready": ("الإصدار {} جاهز، وسيُثبَّت عند إغلاق البرنامج.",
+                     "Version {} is ready and will be installed when the program closes."),
+    "update_available": ("يتوفر إصدار جديد ({}). هل تريد فتح صفحة التنزيل؟",
+                         "A new version ({}) is out. Open the download page?"),
+    "unsaved_update": ("الصفحات المقروءة لم تُصدَّر بعد، وستضيع قراءتها وتصحيحاتك. هل تريد التحديث الآن؟",
+                       "The pages read have not been exported; their reading and your corrections will be lost. "
+                       "Update now anyway?"),
     "about_text": (
         "<h3>Coptic OCR</h3><p>برنامج مفتوح المصدر للتعرف على نصوص الكتب الكنسية القبطية "
         "وتحويلها إلى PDF قابل للبحث وWord ونص.</p>"
