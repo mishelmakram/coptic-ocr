@@ -45,8 +45,10 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "..\dist\CopticOCR\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autoprograms}\Coptic OCR"; Filename: "{app}\CopticOCR.exe"
-Name: "{autodesktop}\Coptic OCR"; Filename: "{app}\CopticOCR.exe"; Tasks: desktopicon
+; The program names itself CopticOCR.CopticOCR to the taskbar (app/main.py); a shortcut with the
+; same ID is where the taskbar takes the program's icon from.
+Name: "{autoprograms}\Coptic OCR"; Filename: "{app}\CopticOCR.exe"; AppUserModelID: "CopticOCR.CopticOCR"
+Name: "{autodesktop}\Coptic OCR"; Filename: "{app}\CopticOCR.exe"; Tasks: desktopicon; AppUserModelID: "CopticOCR.CopticOCR"
 
 [Run]
 Filename: "{app}\CopticOCR.exe"; Description: "{cm:LaunchProgram,Coptic OCR}"; Flags: nowait postinstall skipifsilent
