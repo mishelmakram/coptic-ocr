@@ -254,20 +254,52 @@ def typeset_page(out: pymupdf.Document, image, result: PageResult, size: tuple[f
     if not lines:
         return page
     archive = pymupdf.Archive(str(bundled_font().parent))
-    # One size for the page, from a typical line; a line's box height varies with its marks.
-    size = sorted(line.box.height for line in lines)[len(lines) // 2] * scale * 0.7
+    # One size for the page, from the height of a typical line's letters (its box varies with its
+    # marks); Noto Sans Coptic's letters stand about two thirds of its size.
+    cores = sorted(_baseline(ink, line.box) - _letters_top(ink, line.box) for line in lines)
+    size = cores[len(cores) // 2] * scale * 1.5
     css = (f"@font-face {{font-family: coptic; src: url({bundled_font().name});}} "
            f"* {{font-family: coptic; font-size: {size:.2f}px; white-space: nowrap; margin: 0; "
            f"line-height: 1.3;}}")
-    for line in lines:
-        # The box bottom is close to the baseline; hang the type from there.
-        bottom = line.box.y1 * scale + size * 0.3
-        for word, x0, x1, side in words_at(line, right_to_left=False):
-            # Room below the type, or the paragraph does not fit and the engine shrinks it.
-            rect = pymupdf.Rect(x0, bottom - size * 1.3, max(x1, x0 + size), bottom + size * 0.7)
-            page.insert_htmlbox(rect, f'<p style="text-align: {side or "left"}">{html.escape(word)}</p>', css=css,
-                                archive=archive, scale_low=0)
+    # Where the font sets its baseline below the top of a box, measured once; a word that does
+    # not fit its printed width is shrunk, its baseline rising with it. Each word is stood on its
+    # line's own baseline: the bottom of the letters, measured on the ink (the box may reach lower,
+    # with a descender or a mark).
+    with pymupdf.open() as scratch:
+        ruler = scratch.new_page(width=size * 40, height=size * 5)
+        ruler.insert_htmlbox(pymupdf.Rect(0, 0, size * 20, size * 5), "<p>ⲁⲛⲟⲕ</p>", css=css, archive=archive)
+        spans = [span for block in ruler.get_text("dict")["blocks"] for line in block.get("lines", [])
+                 for span in line["spans"]]
+        drop = spans[0]["origin"][1] if spans else size
+        for line in lines:
+            baseline = _baseline(ink, line.box) * scale
+            for word, x0, x1, side in words_at(line, right_to_left=False):
+                body = f'<p style="text-align: {side or "left"}">{html.escape(word)}</p>'
+                width = max(x1, x0 + size) - x0
+                ruler.clean_contents()
+                _, shrink = ruler.insert_htmlbox(pymupdf.Rect(0, 0, width, size * 2), body, css=css, archive=archive,
+                                                 scale_low=0)
+                top = baseline - drop * shrink
+                # Room below the type, or the paragraph does not fit and the engine shrinks it more.
+                page.insert_htmlbox(pymupdf.Rect(x0, top, x0 + width, top + size * 2), body, css=css,
+                                    archive=archive, scale_low=0)
     return page
+
+
+def _baseline(ink: np.ndarray, box) -> int:
+    """The row under a line's letters: where its ink thins out, marks and descenders aside."""
+    profile = ink[box.y0:box.y1, box.x0:box.x1].sum(1)
+    if not len(profile) or profile.max() == 0:
+        return box.y1
+    return box.y0 + int(np.flatnonzero(profile >= 0.3 * profile.max())[-1]) + 1
+
+
+def _letters_top(ink: np.ndarray, box) -> int:
+    """The row over a line's letters, marks above them aside (see ``_baseline``)."""
+    profile = ink[box.y0:box.y1, box.x0:box.x1].sum(1)
+    if not len(profile) or profile.max() == 0:
+        return box.y0
+    return box.y0 + int(np.flatnonzero(profile >= 0.3 * profile.max())[0])
 
 
 def to_typeset_pdf(doc: Document, results: list[PageResult | None], path: Path) -> None:

@@ -305,6 +305,7 @@ def find_lines(ink: np.ndarray, box: Box, min_gap: int = 2) -> list[Box]:
     if pending is not None and lines and pending[0] - lines[-1][1] < typical * 0.3:
         lines[-1][1] = pending[1]
     lines = _split_tall(lines, region.sum(1))
+    _marks_to_the_line_below(lines, region)
 
     out = []
     for s, e in lines:
@@ -341,6 +342,37 @@ def _split_tall(lines: list[list[int]], profile: np.ndarray, size: float = 1.7) 
             continue
         pending[:0] = [[s, cut], [cut, e]]
     return out
+
+
+def _marks_to_the_line_below(lines: list[list[int]], region: np.ndarray) -> None:
+    """Give marks hanging under a line's letters to the line below when they are nearer to it.
+
+    A jinkim over the first letters of a line can touch a descender of the line above (ϣ, ϥ),
+    leaving no blank row between them; it then came out with the line above, whose box grew
+    down into the next line. Marks that stand apart below a line's letters, and closer to the
+    next line than to them, are that line's."""
+    from scipy import ndimage
+
+    for k in range(len(lines) - 1):
+        s, e = lines[k]
+        below_top = lines[k + 1][0]
+        profile = region[s:e].sum(1)
+        if not len(profile) or profile.max() == 0:
+            continue
+        core = s + int(np.flatnonzero(profile >= 0.3 * profile.max())[-1]) + 1  # bottom of the letters
+        if e - core < 3:
+            continue
+        labels, count = ndimage.label(region[s:e], structure=np.ones((3, 3)))
+        moved, kept = [], core
+        for rows, _ in ndimage.find_objects(labels):
+            top, bottom = s + rows.start, s + rows.stop
+            if top >= core and below_top - bottom < 0.25 * (top - core):  # clearly on the next line
+                moved.append(top)
+            else:
+                kept = max(kept, bottom)
+        if moved:
+            lines[k][1] = kept
+            lines[k + 1][0] = min(below_top, min(moved))
 
 
 def word_spans(ink: np.ndarray, line: Box, words: int) -> list[tuple[int, int]] | None:

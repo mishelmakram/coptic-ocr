@@ -110,3 +110,13 @@ def test_an_arch_of_ornament_is_found_down_to_its_feet():
     for x in range(20, 580, 70):
         ink[100:125, x:x + 40] = True               # capitals a little taller than a line are no ornament
     assert ornament_bottom(ink) == 0
+
+
+def test_a_jinkim_touching_the_line_above_goes_with_its_own_line():
+    ink = page(400, 300)
+    ink[20:60, 10:300] = True                       # a line
+    ink[60:74, 200:204] = True                      # a descender reaching down, leaving no blank row
+    ink[74:78, 220:240] = True                      # beside the jinkim over the next line
+    ink[80:120, 10:300] = True                      # the next line, 2 px below it
+    lines = find_lines(ink, Box(0, 0, 400, 300))
+    assert lines[0].y1 == 74 and lines[1].y0 == 74
