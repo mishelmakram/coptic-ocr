@@ -65,6 +65,31 @@ def letter_height(ink: np.ndarray) -> float:
     return float(np.median(heights[areas >= np.median(areas)]))
 
 
+def ornament_bottom(ink: np.ndarray, size: float = 1.4) -> int:
+    """Where a band of ornament over the text ends (an arch of crosses around the titles), or 0.
+
+    The ornament is several shapes taller than ``size`` lines of text, one below the other from
+    near the top of the page; capitals and a drop cap are not so tall, frames run the page's
+    whole height."""
+    from scipy import ndimage
+
+    bands = find_lines(ink, Box(0, 0, ink.shape[1], ink.shape[0]))
+    if len(bands) < 3:
+        return 0
+    line = float(np.median([b.height for b in bands]))
+    labels, count = ndimage.label(ink, structure=np.ones((3, 3)))
+    spans = sorted((s[0].start, s[0].stop) for s in ndimage.find_objects(labels)
+                   if size * line < s[0].stop - s[0].start < 0.5 * ink.shape[0] and s[1].stop - s[1].start > 0.7 * line)
+    if len(spans) < 3 or spans[0][0] > 0.25 * ink.shape[0]:
+        return 0
+    bottom, chained = spans[0][1], 1
+    for top, end in spans[1:]:
+        if top > bottom + line:
+            break  # what comes later (a drop cap) is no part of it
+        bottom, chained = max(bottom, end), chained + 1
+    return int(bottom) if chained >= 3 else 0
+
+
 def remove_ornaments(clean: np.ndarray, ink: np.ndarray, letter: float, size: float = 2.5) -> np.ndarray:
     """``clean`` (the ink without rules) without a band of ornament: crosses and tiles around a
     title over the columns. Meant for the page's head only: in the text, large capitals

@@ -19,9 +19,9 @@ import numpy as np
 import pymupdf
 from PIL import Image
 
-from .layout.projection import (Box, binarize, find_lines, letter_height, remove_ornaments, remove_rules,
-                                skip_header, page_head, split_columns, split_further, split_margin,
-                                text_left_edge, without_tall_shapes)
+from .layout.projection import (Box, binarize, find_lines, letter_height, ornament_bottom, page_head,
+                                remove_ornaments, remove_rules, skip_header, split_columns, split_further,
+                                split_margin, text_left_edge, without_tall_shapes)
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
 PDF_DPI = 300
@@ -131,7 +131,14 @@ def find_text_lines(gray: np.ndarray) -> list[list[TextLine]]:
     """Lines of each text column, top to bottom; scripts are not decided yet."""
     ink = binarize(gray)
     clean = remove_rules(ink)
-    columns = split_columns(clean)
+    letter = letter_height(clean)
+    # Columns are sought below an ornament over the titles: its sides may come down beside them.
+    below = ornament_bottom(ink)
+    search = clean
+    if below:
+        search = clean.copy()
+        search[:below] = False
+    columns = split_columns(search)
     head = None
     if columns is None:
         rows, cols = np.flatnonzero(clean.any(1)), np.flatnonzero(clean.any(0))
@@ -144,7 +151,7 @@ def find_text_lines(gray: np.ndarray) -> list[list[TextLine]]:
         head_clean = remove_rules(head_ink)
         head = page_head(head_clean, columns)
         if head is not None:
-            head_clean = remove_ornaments(head_clean, head_ink, letter_height(clean))
+            head_clean = remove_ornaments(head_clean, head_ink, letter)
     columns = [part for column in columns for part in split_further(clean, column, clean.shape[1])]
     result = []
     for number, column in enumerate(columns):

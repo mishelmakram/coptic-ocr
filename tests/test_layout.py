@@ -1,7 +1,7 @@
 import numpy as np
 
-from copticocr.layout.projection import (Box, find_lines, page_head, skip_header, split_columns, split_further,
-                                         split_margin, without_tall_shapes)
+from copticocr.layout.projection import (Box, find_lines, ornament_bottom, page_head, skip_header, split_columns,
+                                         split_further, split_margin, without_tall_shapes)
 
 
 def page(width=600, height=300):
@@ -93,3 +93,20 @@ def test_a_drop_cap_drawn_in_pieces_does_not_join_its_lines():
         ink[y:y + 10, 20:90] = True                 # a drop cap three lines high, in pieces
     lines = find_lines(without_tall_shapes(ink, Box(0, 0, 600, 400)), Box(0, 0, 600, 400))
     assert len(lines) == 6
+
+
+def test_an_arch_of_ornament_is_found_down_to_its_feet():
+    ink = page(600, 1000)
+    for x in range(20, 580, 70):
+        ink[20:80, x:x + 50] = True                 # the arch's top row of crosses
+    for y in range(90, 330, 70):
+        ink[y:y + 60, 20:70] = True                 # its sides, coming down beside the titles
+        ink[y:y + 60, 530:580] = True
+    for y in range(400, 960, 40):
+        ink[y:y + 20, 20:280] = True                # the text, in lines of 20 px
+        ink[y:y + 20, 330:580] = True
+    assert ornament_bottom(ink) == 360
+    ink[:380] = False
+    for x in range(20, 580, 70):
+        ink[100:125, x:x + 40] = True               # capitals a little taller than a line are no ornament
+    assert ornament_bottom(ink) == 0
