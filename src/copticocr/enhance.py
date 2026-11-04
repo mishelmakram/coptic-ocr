@@ -21,6 +21,7 @@ BATCH = 50  # pages held in memory before they are appended to the file
 FAINTEST = 0.06  # the palest print taken for ink: this much darker than the paper
 GRAINY = 0.01  # spread of the paper's brightness above which a scan counts as grainy
 GRAIN_DEPTH = 2.5  # how far below the ink, in the grain's spread, its darkest pixel lies
+WHITE_MARK = 0.15  # how much brighter than the ink around it the eye of a letter must be to stay open
 PALE = 0.3  # of the page's darkest print (its contrast): marks paler than this are frames and shading
 PINHOLE = 0.0012  # of the letter height squared: white holes this small inside ink are scanning faults
 # Memory of one page being enhanced: a worker process's own (Python and its libraries) plus
@@ -177,7 +178,27 @@ def _cut_each_mark(level_map: np.ndarray) -> np.ndarray:
     frame = ((long_side > 2 * letter) & (short_side < 0.25 * letter)) | (heights > 3 * letter) | (widths > 15 * letter)
     printed = strong | ((peak <= 1.0 - FAINTEST) & ~frame)
     cut = np.where(printed, (peak + 1.0) / 2, 0.0).astype(np.float32)  # not print: paper
-    return level_map - np.concatenate([np.zeros(1, np.float32), cut])[marks]
+    cut = np.concatenate([np.zeros(1, np.float32), cut])[marks]
+    del marks
+
+    # The same the other way round: the eyes of letters (ق ف و ط ه, ⲁ ϧ) and the narrow gaps
+    # between teeth (س ش) are white marks inside the ink. On a small or blurred scan they are a
+    # pixel or two wide and never come out as white as the paper, so cut with the ink they would
+    # fill in, and the letter turns into a blot. Each is opened halfway between the ink around
+    # it and its own brightest point.
+    around = ndimage.grey_opening(level_map, size=(3, 3))  # the ink with such white marks closed
+    light = level_map - around
+    inside = level_map < cut
+    lights, count = ndimage.label((light > FAINTEST) & inside, structure=np.ones((3, 3)))
+    if count:
+        index = np.arange(1, count + 1)
+        brightest = np.asarray(ndimage.maximum(level_map, lights, index), np.float32)
+        depth = np.asarray(ndimage.maximum(light, lights, index), np.float32)
+        # Only a clear white mark, not the grain inside a stroke.
+        opened = np.concatenate([[False], depth > max(WHITE_MARK, GRAIN_DEPTH * grain)])
+        where = opened[lights]
+        cut[where] = np.minimum(cut[where], (around[where] + brightest[lights[where] - 1]) / 2)
+    return level_map - cut
 
 
 def preview(image: Image.Image, level: int = 1) -> Image.Image:

@@ -1,6 +1,6 @@
 import numpy as np
 import pymupdf
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 
 from copticocr.enhance import clean, outline_ops, to_enhanced_pdf
 from copticocr.pipeline import Document
@@ -92,3 +92,20 @@ def test_pale_frames_stay_paper():
     ink, factor = clean(image, 1)
     assert ink[int(200 * factor), int(103 * factor)]
     assert not ink[int(41 * factor), int(400 * factor)] and not ink[int(200 * factor), int(890 * factor)]
+
+
+def test_the_eye_of_a_small_blurred_letter_stays_open():
+    """On a small scan the eye of ق or و is a pixel or two wide and never comes out as white as
+    the paper; it must not be filled in."""
+    image = Image.new("L", (300, 120), 245)
+    draw = ImageDraw.Draw(image)
+    for x in range(40, 260, 40):
+        draw.ellipse((x, 50, x + 9, 59), fill=20)         # a small round letter
+        draw.rectangle((x + 4, 54, x + 5, 55), fill=245)  # its eye, 2 px
+    for x in range(20, 280, 9):
+        draw.rectangle((x, 90, x + 5, 100), fill=20)      # more print, so the page has a letter size
+    image = image.filter(ImageFilter.GaussianBlur(1.0))
+    ink, factor = clean(image, 1)
+    for x in range(40, 260, 40):
+        assert ink[int(51 * factor), int((x + 4.5) * factor)]          # the ring
+        assert not ink[round(55 * factor), round((x + 5) * factor)], x  # its eye
