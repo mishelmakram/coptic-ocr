@@ -196,6 +196,10 @@ def style_sheet(t: Theme) -> str:
     QLabel#footerText {{ color: {t.muted}; font-size: 9pt; }}
     QLabel#chip {{ background: {t.sunken}; color: {t.text}; border-radius: 9px; padding: 3px 10px;
                    font-size: 9pt; }}
+    QPushButton#updateChip {{ background: {t.accent_soft}; color: {t.accent}; border: none; border-radius: 9px;
+                              padding: 3px 12px; font-size: 9pt; font-weight: 600; }}
+    QPushButton#updateChip:hover {{ background: {t.accent}; color: {t.on_accent}; }}
+    QPushButton#updateChip:disabled {{ background: {t.accent_soft}; color: {t.accent}; font-weight: normal; }}
 
     /* Dialogs and controls */
     QComboBox {{ background: {t.surface}; border: 1px solid {t.border}; border-radius: 9px; padding: 6px 10px; }}

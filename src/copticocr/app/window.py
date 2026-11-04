@@ -326,6 +326,13 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout(footer)
         row.setContentsMargins(16, 0, 16, 0)
         row.setSpacing(6)
+        # An update, while it downloads and once it is ready to install.
+        self.update_chip = QPushButton()
+        self.update_chip.setObjectName("updateChip")
+        self.update_chip.setCursor(Qt.PointingHandCursor)
+        self.update_chip.clicked.connect(self._update_chip_clicked)
+        self.update_chip.hide()
+        row.addWidget(self.update_chip)
         row.addStretch(1)
         self.page_chip, self.read_chip, self.model_chip = QLabel(), QLabel(), QLabel()
         self.machine_chip = QLabel()
@@ -955,17 +962,23 @@ class MainWindow(QMainWindow):
         installed = update.installed_copy()
         found: dict = {}
 
-        def work(_report) -> bool:
+        def work(report) -> bool:
             release = update.latest_release()
-            found["tag"] = release.get("tag_name", "")
+            found["tag"] = release.get("tag_name", "").lstrip("vV")
             asset = update.installer_asset(release)
             if update.is_newer(found["tag"]) and asset is not None and installed:
-                found["setup"] = update.download(asset, update.updates_folder())
+                report(0, 1)
+                found["setup"] = update.download(asset, update.updates_folder(), report)
             return True
+
+        def downloading(done: int, total: int) -> None:
+            percent = int(100 * done / total) if total else 0
+            self._show_update(tr("update_downloading", found.get("tag", ""), percent), None)
 
         def finished(_completed: bool, error: str) -> None:
             self._update_job = None
             if error:
+                self.update_chip.hide()
                 if asked:
                     self.notify(tr("update_failed"))
                 return
@@ -976,18 +989,33 @@ class MainWindow(QMainWindow):
                     self.notify(tr("update_none", update.__version__))
             elif "setup" in found:
                 self._update_ready = found["setup"]
-                self.update_action.setText(tr("update_now_version", tag.lstrip("vV")))
+                self.update_action.setText(tr("update_now_version", tag))
                 self.update_action.setVisible(True)
-                self.notify(tr("update_ready", tag.lstrip("vV")), 4500)
+                self._show_update(tr("update_ready_chip", tag), "install", tr("update_ready", tag))
+                self.notify(tr("update_ready", tag), 4500)
             else:  # the portable copy, or a release without an installer
-                if QMessageBox.question(self, tr("app_name"), tr("update_available", tag.lstrip("vV")))                         == QMessageBox.Yes:
-                    QDesktopServices.openUrl(QUrl(update.RELEASES_PAGE))
+                self._show_update(tr("update_available_chip", tag), "page")
 
         if asked:
             self.notify(tr("update_checking"))
         self._update_job = Job(work)
+        self._update_job.progressed.connect(downloading)
         self._update_job.done.connect(finished)
         self._update_job.start()
+
+    def _show_update(self, text: str, click: str | None, tip: str = "") -> None:
+        """The update's state in the footer; ``click`` is what clicking it does, if anything."""
+        self._update_click = click
+        self.update_chip.setText(text)
+        self.update_chip.setToolTip(tip)
+        self.update_chip.setEnabled(click is not None)
+        self.update_chip.show()
+
+    def _update_chip_clicked(self) -> None:
+        if getattr(self, "_update_click", None) == "install":
+            self.update_now()
+        elif getattr(self, "_update_click", None) == "page":
+            QDesktopServices.openUrl(QUrl(update.RELEASES_PAGE))
 
     def update_now(self) -> None:
         """Install the downloaded update and start the new version."""
